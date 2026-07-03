@@ -111,6 +111,33 @@ vllm-version dest=".":
     cat "{{dest}}/vllm_image.txt"
     cat "{{dest}}/vllm_fingerprint.txt"
 
+# Dump logs from all involved pods into a directory.
+dump-logs dest=".":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    NS={{NAMESPACE}}
+    mkdir -p "{{dest}}/logs"
+    for pod in $(kubectl get pods -n "$NS" -l llm-d.ai/role -o jsonpath='{.items[*].metadata.name}'); do
+        echo "  logs: $pod"
+        kubectl logs -n "$NS" "$pod" --all-containers > "{{dest}}/logs/${pod}.log" 2>&1 || true
+    done
+    # EPP
+    for pod in $(kubectl get pods -n "$NS" -l app.kubernetes.io/name=epp -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
+        echo "  logs: $pod"
+        kubectl logs -n "$NS" "$pod" --all-containers > "{{dest}}/logs/${pod}.log" 2>&1 || true
+    done
+    # Gateway
+    for pod in $(kubectl get pods -n "$NS" -l gateway.networking.k8s.io/gateway-name -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
+        echo "  logs: $pod"
+        kubectl logs -n "$NS" "$pod" --all-containers > "{{dest}}/logs/${pod}.log" 2>&1 || true
+    done
+    # aiperf runner
+    for pod in $(kubectl get pods -n "$NS" -l app={{deploy}} -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
+        echo "  logs: $pod"
+        kubectl logs -n "$NS" "$pod" --all-containers > "{{dest}}/logs/${pod}.log" 2>&1 || true
+    done
+    echo "Logs saved to {{dest}}/logs/"
+
 # Export Grafana dashboards for result directories.
 # Usage: just scrape-grafana results_p1_d2_c1 results_p1_d2_c4
 scrape-grafana +dirs:
@@ -144,6 +171,7 @@ sweep-concurrency prefix="sweep" duration="900":
         echo "=== concurrency=$C ({{duration}}s) ==="
         just run $C {{duration}}
         just results "results_{{prefix}}_c${C}"
+        just dump-logs "results_{{prefix}}_c${C}"
         just wipe
         sleep 10
     done
