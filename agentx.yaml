@@ -8,7 +8,6 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: aiperf-agentx
-  namespace: llm-d-optimized-baseline
   labels:
     app: aiperf-agentx
 spec:
