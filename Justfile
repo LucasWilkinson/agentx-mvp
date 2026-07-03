@@ -39,7 +39,7 @@ deploy:
 # (The slim image has no curl, so use python's urllib.)
 check:
     kubectl exec -n {{NAMESPACE}} deploy/{{deploy}} -- \
-      python -c "import urllib.request as u; print(u.urlopen('{{url}}/v1/models', timeout=10).read().decode())"
+      python -c "import urllib.request as u; print(u.urlopen('{{url}}/models', timeout=10).read().decode())"
 
 # Run the AgentX-MVP benchmark. Args: [concurrency] [duration-seconds].
 run concurrency=concurrency duration=duration:
@@ -95,13 +95,37 @@ shell:
 clean:
     kubectl delete -f agentx.yaml --ignore-not-found
 
-# Deploy PD: just start-pd <prefill_replicas> <decode_size>
+# Capture vllm version info from a running deployment into a directory.
+vllm-version dest=".":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    NS={{NAMESPACE}}
+    # Image tag
+    kubectl get pod -n "$NS" -l llm-d.ai/role=prefill -o jsonpath='{.items[0].spec.containers[0].image}' > "{{dest}}/vllm_image.txt"
+    echo "" >> "{{dest}}/vllm_image.txt"
+    # system_fingerprint from the API
+    kubectl exec -n "$NS" deploy/{{deploy}} -- \
+      python -c "import urllib.request,json;r=json.loads(urllib.request.urlopen('{{url}}/chat/completions',data=json.dumps({'model':'{{model}}','messages':[{'role':'user','content':'hi'}],'max_tokens':1}).encode(),timeout=30).read());print(r.get('system_fingerprint','unknown'))" \
+      > "{{dest}}/vllm_fingerprint.txt" 2>/dev/null || true
+    echo "vllm version saved to {{dest}}/"
+    cat "{{dest}}/vllm_image.txt"
+    cat "{{dest}}/vllm_fingerprint.txt"
+
+# Export Grafana dashboards for result directories.
+# Usage: just scrape-grafana results_p1_d2_c1 results_p1_d2_c4
+scrape-grafana +dirs:
+    python3 export_dashboard.py results {{dirs}}
+
+# Deploy PD: just start-pd <prefill_replicas> <decode_size> [max_tokens]
 # prefill_replicas = number of prefill pods
 # decode_size = number of decode nodes (each node = 8 GPUs via EP)
+# max_tokens = decode MAX_TOKENS env var (default 1024)
 start-pd prefill_replicas decode_size:
-    kubectl apply -n {{NAMESPACE}} -f <(sed 's/replicas: [0-9]*/replicas: {{prefill_replicas}}/' {{pd_prefill}})
-    kubectl apply -n {{NAMESPACE}} -f <(sed 's/size: [0-9]*/size: {{decode_size}}/' {{pd_decode}})
-    @echo "Deployed P{{prefill_replicas}} D{{decode_size}} — waiting for pods..."
+    #!/usr/bin/env bash
+    set -euo pipefail
+    PREFILL_REPLICAS={{prefill_replicas}} envsubst '${PREFILL_REPLICAS}' < {{pd_prefill}} | kubectl apply -n {{NAMESPACE}} -f -
+    DECODE_SIZE={{decode_size}} envsubst '${DECODE_SIZE}' < {{pd_decode}} | kubectl apply -n {{NAMESPACE}} -f -
+    echo "Deployed P{{prefill_replicas}} D{{decode_size}} — waiting for pods..."
     kubectl rollout status --watch statefulset/wide-ep-lws-nvidia-gpu-vllm-glm-5-2-prefill -n {{NAMESPACE}} --timeout=2700s &
     kubectl rollout status --watch statefulset/wide-ep-lws-nvidia-gpu-vllm-glm-5-2-decode -n {{NAMESPACE}} --timeout=2700s &
     wait
@@ -109,3 +133,38 @@ start-pd prefill_replicas decode_size:
 # Tear down PD deployment.
 stop-pd:
     kubectl delete lws wide-ep-lws-nvidia-gpu-vllm-glm-5-2-prefill wide-ep-lws-nvidia-gpu-vllm-glm-5-2-decode -n {{NAMESPACE}} --ignore-not-found
+
+# Sweep concurrency (1..64 powers of 2) for the currently deployed P:D config.
+# Results go to results_<prefix>_c<N>/ directories.
+# Usage: just sweep-concurrency p2_d1
+sweep-concurrency prefix="sweep" duration="900":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for C in 1 4 16 64; do
+        echo "=== concurrency=$C ({{duration}}s) ==="
+        just run $C {{duration}}
+        just results "results_{{prefix}}_c${C}"
+        just wipe
+        sleep 10
+    done
+
+# Full sweep: deploy each P:D config, run concurrency sweep, tear down.
+# Configs are space-separated P:D pairs.
+# Usage: just sweep "1:2 2:1 2:2"
+sweep configs duration="900":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    NS={{NAMESPACE}}
+    for cfg in {{configs}}; do
+        IFS=: read -r P D <<< "$cfg"
+        echo "====== P${P}:D${D} ======"
+        just start-pd "$P" "$D"
+        just check
+        dir="results_p${P}_d${D}"
+        mkdir -p "$dir"
+        kubectl get pod -n "$NS" -l llm-d.ai/role=prefill -o yaml > "$dir/prefill.yaml"
+        kubectl get pod -n "$NS" -l llm-d.ai/role=decode -o yaml > "$dir/decode.yaml"
+        just vllm-version "$dir"
+        just sweep-concurrency "p${P}_d${D}" {{duration}}
+        just stop-pd
+    done
