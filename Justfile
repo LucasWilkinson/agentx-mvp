@@ -404,7 +404,7 @@ setup-namespace ns:
               names:
                 - {{ns}}
         relabel_configs:
-          - source_labels: [__meta_kubernetes_pod_label_inferencepool]
+          - source_labels: [__meta_kubernetes_pod_label_llm_d_router_gateway]
             regex: .+
             action: keep
           - source_labels: [__meta_kubernetes_pod_ip]
@@ -412,7 +412,7 @@ setup-namespace ns:
             replacement: '\${1}:9090'
           - source_labels: [__meta_kubernetes_pod_name]
             target_label: pod
-          - source_labels: [__meta_kubernetes_pod_label_inferencepool]
+          - source_labels: [__meta_kubernetes_pod_label_llm_d_router_gateway]
             target_label: inferencepool
         scrape_interval: 1s
         metrics_path: /metrics
@@ -546,13 +546,15 @@ start-pd prefill_replicas decode_size:
         -f "$ROOT/guides/wide-ep-lws/router/glm-5.2-overrides.values.yaml" \
         --set provider.name=istio \
         --set router.epp.image.tag=v0.9.0 \
+        --set 'router.epp.flags.metrics-endpoint-auth=false' \
+        --set 'router.epp.flags.secure-serving=false' \
         -n {{NAMESPACE}} --version v0.9.0
     # Deploy prefill/decode LWS
     PREFILL_REPLICAS={{prefill_replicas}} envsubst '${PREFILL_REPLICAS}' < {{pd_prefill}} | kubectl apply -n {{NAMESPACE}} -f -
     DECODE_SIZE={{decode_size}} envsubst '${DECODE_SIZE}' < {{pd_decode}} | kubectl apply -n {{NAMESPACE}} -f -
     echo "Deployed P{{prefill_replicas}} D{{decode_size}} — waiting for pods..."
-    kubectl rollout status --watch statefulset/wide-ep-lws-nvidia-gpu-vllm-glm-5-2-prefill -n {{NAMESPACE}} --timeout=2700s &
-    kubectl rollout status --watch statefulset/wide-ep-lws-nvidia-gpu-vllm-glm-5-2-decode -n {{NAMESPACE}} --timeout=2700s &
+    kubectl rollout status --watch statefulset/wide-ep-lws-nvidia-gpu-vllm-glm-5-2-prefill -n {{NAMESPACE}} --timeout=7200s &
+    kubectl rollout status --watch statefulset/wide-ep-lws-nvidia-gpu-vllm-glm-5-2-decode -n {{NAMESPACE}} --timeout=7200s &
     wait
 
 # Tear down PD deployment.
@@ -767,7 +769,7 @@ seed-sequential outdir configs:
     OUTDIR="{{outdir}}"
     CONFIGS="{{configs}}"
     TMPSCRIPT=$(mktemp)
-    printf '#!/bin/bash\ncd /workspace/agentx-mvp\nfor cfg in %s; do\n  IFS=: read -r P D <<< "$cfg"\n  NS=ecrncevi-dev-p${P}d${D}\n  echo "====== Sequential: P${P}:D${D} in $NS ======"\n  just setup-namespace "$NS"\n  NAMESPACE="$NS" just sweep "%s" "${P}:${D}"\n  just teardown-namespace "$NS"\ndone\n' "$CONFIGS" "$OUTDIR" > "$TMPSCRIPT"
+    printf '#!/bin/bash\ncd /workspace/agentx-mvp\nfor cfg in %s; do\n  IFS=: read -r P D <<< "$cfg"\n  NS=ecrncevi-dev-p${P}d${D}\n  echo "====== Sequential: P${P}:D${D} in $NS ======"\n  if ! just setup-namespace "$NS"; then\n    echo "FAILED: setup for P${P}:D${D}, skipping"\n    just teardown-namespace "$NS" 2>/dev/null || true\n    continue\n  fi\n  NAMESPACE="$NS" just sweep "%s" "${P}:${D}" || echo "FAILED: sweep for P${P}:D${D}"\n  just teardown-namespace "$NS"\ndone\n' "$CONFIGS" "$OUTDIR" > "$TMPSCRIPT"
     kubectl cp "$TMPSCRIPT" "$NS/${POD}:/workspace/run_seed.sh"
     rm -f "$TMPSCRIPT"
     kubectl exec -n "$NS" "$POD" -- chmod +x /workspace/run_seed.sh
@@ -796,6 +798,29 @@ seed-results outdir:
     echo "Results copied to {{outdir}}/"
     # Regenerate interactivity chart locally
     python3 gen_interactivity_chart.py "{{outdir}}" 2>/dev/null || true
+
+# Stop the running sweep, tear down all benchmark namespaces, and clean up the seed pod.
+seed-stop:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    NS={{NAMESPACE}}
+    # Kill the sweep process
+    POD=$(kubectl get pod -n "$NS" -l app={{seed_deploy}} -o jsonpath='{.items[0].metadata.name}' 2>/dev/null) || true
+    if [ -n "$POD" ]; then
+        kubectl exec -n "$NS" "$POD" -- bash -c 'kill $(cat /workspace/seed-sweep.pid 2>/dev/null) 2>/dev/null; rm -f /workspace/seed-sweep.pid' 2>/dev/null || true
+        echo "Sweep process killed."
+    fi
+    # Find and tear down all benchmark namespaces (ecrncevi-dev-p*d*)
+    for BNS in $(kubectl get ns -o name | grep "^namespace/{{NAMESPACE}}-p[0-9]" | sed 's|namespace/||'); do
+        echo "Tearing down $BNS..."
+        kubectl delete lws wide-ep-lws-nvidia-gpu-vllm-glm-5-2-prefill wide-ep-lws-nvidia-gpu-vllm-glm-5-2-decode -n "$BNS" --ignore-not-found 2>/dev/null || true
+        helm uninstall wide-ep-lws -n "$BNS" 2>/dev/null || true
+        helm uninstall prometheus -n "$BNS" 2>/dev/null || true
+        helm uninstall grafana -n "$BNS" 2>/dev/null || true
+        kubectl delete namespace "$BNS" --ignore-not-found &
+    done
+    wait
+    echo "All benchmark namespaces deleted."
 
 # Delete the seed orchestrator pod and RBAC.
 seed-clean:
