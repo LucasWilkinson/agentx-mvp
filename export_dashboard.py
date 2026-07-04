@@ -64,11 +64,63 @@ def extract_panels(panels):
     return result
 
 
+def convert_scenes_to_classic(dashboard):
+    """Convert Grafana Scenes/v2 dashboard (elements+layout) to classic panels format."""
+    elements = dashboard.get("elements", {})
+    layout = dashboard.get("layout", {})
+    items = layout.get("spec", {}).get("items", [])
+
+    panels = []
+    for item in items:
+        ref = item.get("spec", {}).get("element", {}).get("name", "")
+        elem = elements.get(ref)
+        if not elem or elem.get("kind") != "Panel":
+            continue
+
+        spec = elem["spec"]
+        queries = spec.get("data", {}).get("spec", {}).get("queries", [])
+        viz = spec.get("vizConfig", {}).get("spec", {})
+        field_config = viz.get("fieldConfig", {})
+
+        targets = []
+        for q in queries:
+            qs = q.get("spec", {}).get("query", {}).get("spec", {})
+            expr = qs.get("expr", "")
+            if not expr:
+                continue
+            targets.append({
+                "expr": expr,
+                "legendFormat": qs.get("legendFormat", ""),
+                "refId": q.get("spec", {}).get("refId", ""),
+            })
+
+        if not targets:
+            continue
+
+        pos = item.get("spec", {})
+        panels.append({
+            "id": ref,
+            "title": spec.get("title", ref),
+            "targets": targets,
+            "fieldConfig": field_config,
+            "gridPos": {"x": pos.get("x", 0), "y": pos.get("y", 0),
+                        "w": pos.get("width", 12), "h": pos.get("height", 8)},
+        })
+
+    panels.sort(key=lambda p: (p["gridPos"]["y"], p["gridPos"]["x"]))
+    return panels
+
+
 def substitute_vars(expr, deployment):
     expr = expr.replace("${deployment}", deployment)
     expr = expr.replace("$deployment", deployment)
     expr = expr.replace("${DS_PROMETHEUS}", "PBFA97CFB590B2093")
     expr = expr.replace("$__all", ".*")
+    expr = expr.replace("$model_name", ".*")
+    expr = expr.replace("${model_name}", ".*")
+    expr = expr.replace("$namespace", ".*")
+    expr = expr.replace("${namespace}", ".*")
+    expr = expr.replace("$__rate_interval", "15s")
     return expr
 
 
@@ -99,7 +151,11 @@ def export(args):
     ds_info = grafana_request(args.grafana_url, "/api/datasources/uid/PBFA97CFB590B2093", args.auth)
     ds_id = ds_info["id"]
 
-    all_panels = dash["dashboard"]["panels"]
+    dash_body = dash["dashboard"]
+    if "elements" in dash_body and "panels" not in dash_body:
+        all_panels = convert_scenes_to_classic(dash_body)
+    else:
+        all_panels = dash_body["panels"]
     query_panels = extract_panels(all_panels)
     print(f"Found {len(query_panels)} panels with queries")
 

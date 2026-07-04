@@ -285,6 +285,7 @@ setup-namespace ns:
     subjects:
     - kind: ServiceAccount
       name: prometheus-server
+      namespace: {{ns}}
     ---
     apiVersion: rbac.authorization.k8s.io/v1
     kind: Role
@@ -306,6 +307,7 @@ setup-namespace ns:
     subjects:
     - kind: ServiceAccount
       name: grafana
+      namespace: {{ns}}
     RBACEOF
     # Copy HF token secret from source namespace, or create a dummy if source is gone
     if kubectl get secret llm-d-hf-token -n {{NAMESPACE}} -o json 2>/dev/null \
@@ -438,13 +440,18 @@ setup-namespace ns:
           access: proxy
           isDefault: true
     GRAFEOF
-    # Copy dashboard ConfigMaps from source namespace
-    for cm in $(kubectl get configmaps -n {{NAMESPACE}} -l grafana_dashboard -o name); do
-        cmname=$(basename "$cm")
-        kubectl get "$cm" -n {{NAMESPACE}} -o json \
-          | python3 -c "import json,sys; d=json.load(sys.stdin); d['metadata']={'name':d['metadata']['name'],'namespace':'{{ns}}','labels':d['metadata'].get('labels',{})}; print(json.dumps(d))" \
-          | kubectl apply -f -
-    done
+    # Apply Grafana dashboards from llm-d repo
+    DASH_DIR="$ROOT/guides/wide-ep-lws/modelserver/gpu/vllm-glm-5.2/base"
+    kubectl create configmap wideep-overview-dashboard \
+        --from-file=wideep-overview.json="$DASH_DIR/grafana-wideep-overview.json" \
+        -n {{ns}} --dry-run=client -o yaml \
+      | kubectl label --local -f - grafana_dashboard=1 -o yaml \
+      | kubectl apply -f -
+    kubectl create configmap aggregate-overview-dashboard \
+        --from-file=aggregate-overview.json="$DASH_DIR/grafana-aggregate.json" \
+        -n {{ns}} --dry-run=client -o yaml \
+      | kubectl label --local -f - grafana_dashboard=1 -o yaml \
+      | kubectl apply -f -
     # Deploy aiperf runner
     kubectl apply -f agentx.yaml -n {{ns}}
     kubectl rollout status deploy/{{deploy}} -n {{ns}} --timeout=300s
@@ -618,3 +625,183 @@ sweep outdir configs duration="900":
     # Export Grafana dashboards via in-pod scraping
     echo "====== Scraping Grafana dashboards ======"
     just report "{{outdir}}" || echo "WARNING: Dashboard scrape failed. Run manually: just report {{outdir}}"
+
+seed_image := "quay.io/rh-ee-ecrncevi/benchmark-seed:amd64"
+seed_deploy := "benchmark-seed"
+
+# Build and push the seed orchestrator image.
+seed-build:
+    podman build --platform linux/amd64 -f Dockerfile.seed -t {{seed_image}} .
+    podman push {{seed_image}}
+
+# Deploy the seed orchestrator pod into the cluster.
+seed-deploy:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    sed "s/NAMESPACE_PLACEHOLDER/{{NAMESPACE}}/" seed.yaml | kubectl apply -n {{NAMESPACE}} -f -
+    kubectl rollout status deploy/{{seed_deploy}} -n {{NAMESPACE}} --timeout=300s
+    POD=$(kubectl get pod -n {{NAMESPACE}} -l app={{seed_deploy}} -o jsonpath='{.items[0].metadata.name}')
+    echo "Adding helm repos..."
+    kubectl exec -n {{NAMESPACE}} "$POD" -- helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+    kubectl exec -n {{NAMESPACE}} "$POD" -- helm repo add grafana https://grafana.github.io/helm-charts
+    kubectl exec -n {{NAMESPACE}} "$POD" -- helm repo update
+    echo "Seed pod ready: $POD"
+
+# Launch a sweep inside the seed pod (detached — safe to disconnect).
+# Usage: just seed results_run1 "1:1 2:2"
+seed outdir configs:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    NS={{NAMESPACE}}
+    ROOT={{llm_d_root}}
+    POD=$(kubectl get pod -n "$NS" -l app={{seed_deploy}} -o jsonpath='{.items[0].metadata.name}')
+    # Ensure helm repos are configured (survives pod restarts)
+    kubectl exec -n "$NS" "$POD" -- helm repo add prometheus-community https://prometheus-community.github.io/helm-charts 2>/dev/null
+    kubectl exec -n "$NS" "$POD" -- helm repo add grafana https://grafana.github.io/helm-charts 2>/dev/null
+    kubectl exec -n "$NS" "$POD" -- helm repo update
+    echo "=== Syncing files to seed pod ==="
+    # Create directory structure
+    kubectl exec -n "$NS" "$POD" -- mkdir -p \
+        /workspace/agentx-mvp \
+        /workspace/llm-d/guides/wide-ep-lws/modelserver/gpu/vllm-glm-5.2/base \
+        /workspace/llm-d/guides/recipes/gateway/base \
+        /workspace/llm-d/guides/recipes/gateway/istio \
+        /workspace/llm-d/guides/recipes/router/features \
+        /workspace/llm-d/guides/wide-ep-lws/router
+    # Copy agentx-mvp files (NOT .env — written fresh below)
+    for f in Justfile agentx.yaml dashboard.json extract_timestamps.py export_dashboard.py gen_interactivity_chart.py overlay_dashboards.py; do
+        [ -f "$f" ] && kubectl cp "$f" "$NS/${POD}:/workspace/agentx-mvp/$f"
+    done
+    # Copy llm-d files
+    LLM_D_FILES=(
+        guides/env.sh
+        guides/wide-ep-lws/modelserver/gpu/vllm-glm-5.2/base/prefill.yaml
+        guides/wide-ep-lws/modelserver/gpu/vllm-glm-5.2/base/decode.yaml
+        guides/wide-ep-lws/modelserver/gpu/vllm-glm-5.2/base/serviceAccount.yaml
+        guides/wide-ep-lws/modelserver/gpu/vllm-glm-5.2/base/grafana-wideep-overview.json
+        guides/wide-ep-lws/modelserver/gpu/vllm-glm-5.2/base/grafana-aggregate.json
+        guides/recipes/gateway/base/kustomization.yaml
+        guides/recipes/gateway/base/gateway.yaml
+        guides/recipes/gateway/istio/kustomization.yaml
+        guides/recipes/gateway/istio/gateway.yaml
+        guides/recipes/gateway/istio/telemetry.yaml
+        guides/recipes/gateway/istio/configmap.yaml
+        guides/recipes/router/base.values.yaml
+        guides/recipes/router/features/httproute-flags.yaml
+        guides/wide-ep-lws/router/wide-ep-lws.values.yaml
+        guides/wide-ep-lws/router/glm-5.2-overrides.values.yaml
+    )
+    for f in "${LLM_D_FILES[@]}"; do
+        kubectl cp "$ROOT/$f" "$NS/${POD}:/workspace/llm-d/$f"
+    done
+    # Write clean .env (no KUBECONFIG — uses ServiceAccount auth)
+    TMPENV=$(mktemp)
+    trap "rm -f $TMPENV" EXIT
+    printf 'NAMESPACE=%s\nGLM_PD_PREFILL=/workspace/llm-d/guides/wide-ep-lws/modelserver/gpu/vllm-glm-5.2/base/prefill.yaml\nGLM_PD_DECODE=/workspace/llm-d/guides/wide-ep-lws/modelserver/gpu/vllm-glm-5.2/base/decode.yaml\nLLM_D_ROOT=/workspace/llm-d\n' "{{NAMESPACE}}" > "$TMPENV"
+    kubectl cp "$TMPENV" "$NS/${POD}:/workspace/agentx-mvp/.env"
+    echo "=== Launching sweep (detached) ==="
+    OUTDIR="{{outdir}}"
+    CONFIGS="{{configs}}"
+    TMPSCRIPT=$(mktemp)
+    printf '#!/bin/bash\ncd /workspace/agentx-mvp\njust sweep-isolated %s '\''%s'\'' > /workspace/seed-sweep.log 2>&1\necho $? > /workspace/seed-sweep.exit_code\nrm -f /workspace/seed-sweep.pid\n' "$OUTDIR" "$CONFIGS" > "$TMPSCRIPT"
+    kubectl cp "$TMPSCRIPT" "$NS/${POD}:/workspace/run_seed.sh"
+    rm -f "$TMPSCRIPT"
+    kubectl exec -n "$NS" "$POD" -- chmod +x /workspace/run_seed.sh
+    kubectl exec -n "$NS" "$POD" -- bash -c 'nohup bash /workspace/run_seed.sh </dev/null >/dev/null 2>&1 & echo $! > /workspace/seed-sweep.pid && echo "Launched PID $!"'
+    echo ""
+    echo "Sweep running detached. Safe to disconnect."
+    echo "  Monitor:  just seed-logs"
+    echo "  Results:  just seed-results {{outdir}}"
+    echo "  Cleanup:  just seed-clean"
+
+# Launch a sequential sweep inside the seed pod (one P:D config at a time).
+# Each config gets its own namespace, runs all concurrencies, then is torn down.
+# Usage: just seed-sequential results_run1 "3:1 2:2 1:2 2:1 1:1"
+seed-sequential outdir configs:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    NS={{NAMESPACE}}
+    ROOT={{llm_d_root}}
+    POD=$(kubectl get pod -n "$NS" -l app={{seed_deploy}} -o jsonpath='{.items[0].metadata.name}')
+    # Ensure helm repos are configured (survives pod restarts)
+    kubectl exec -n "$NS" "$POD" -- helm repo add prometheus-community https://prometheus-community.github.io/helm-charts 2>/dev/null
+    kubectl exec -n "$NS" "$POD" -- helm repo add grafana https://grafana.github.io/helm-charts 2>/dev/null
+    kubectl exec -n "$NS" "$POD" -- helm repo update
+    echo "=== Syncing files to seed pod ==="
+    kubectl exec -n "$NS" "$POD" -- mkdir -p \
+        /workspace/agentx-mvp \
+        /workspace/llm-d/guides/wide-ep-lws/modelserver/gpu/vllm-glm-5.2/base \
+        /workspace/llm-d/guides/recipes/gateway/base \
+        /workspace/llm-d/guides/recipes/gateway/istio \
+        /workspace/llm-d/guides/recipes/router/features \
+        /workspace/llm-d/guides/wide-ep-lws/router
+    for f in Justfile agentx.yaml dashboard.json extract_timestamps.py export_dashboard.py gen_interactivity_chart.py overlay_dashboards.py; do
+        [ -f "$f" ] && kubectl cp "$f" "$NS/${POD}:/workspace/agentx-mvp/$f"
+    done
+    LLM_D_FILES=(
+        guides/env.sh
+        guides/wide-ep-lws/modelserver/gpu/vllm-glm-5.2/base/prefill.yaml
+        guides/wide-ep-lws/modelserver/gpu/vllm-glm-5.2/base/decode.yaml
+        guides/wide-ep-lws/modelserver/gpu/vllm-glm-5.2/base/serviceAccount.yaml
+        guides/wide-ep-lws/modelserver/gpu/vllm-glm-5.2/base/grafana-wideep-overview.json
+        guides/wide-ep-lws/modelserver/gpu/vllm-glm-5.2/base/grafana-aggregate.json
+        guides/recipes/gateway/base/kustomization.yaml
+        guides/recipes/gateway/base/gateway.yaml
+        guides/recipes/gateway/istio/kustomization.yaml
+        guides/recipes/gateway/istio/gateway.yaml
+        guides/recipes/gateway/istio/telemetry.yaml
+        guides/recipes/gateway/istio/configmap.yaml
+        guides/recipes/router/base.values.yaml
+        guides/recipes/router/features/httproute-flags.yaml
+        guides/wide-ep-lws/router/wide-ep-lws.values.yaml
+        guides/wide-ep-lws/router/glm-5.2-overrides.values.yaml
+    )
+    for f in "${LLM_D_FILES[@]}"; do
+        kubectl cp "$ROOT/$f" "$NS/${POD}:/workspace/llm-d/$f"
+    done
+    TMPENV=$(mktemp)
+    trap "rm -f $TMPENV" EXIT
+    printf 'NAMESPACE=%s\nGLM_PD_PREFILL=/workspace/llm-d/guides/wide-ep-lws/modelserver/gpu/vllm-glm-5.2/base/prefill.yaml\nGLM_PD_DECODE=/workspace/llm-d/guides/wide-ep-lws/modelserver/gpu/vllm-glm-5.2/base/decode.yaml\nLLM_D_ROOT=/workspace/llm-d\n' "{{NAMESPACE}}" > "$TMPENV"
+    kubectl cp "$TMPENV" "$NS/${POD}:/workspace/agentx-mvp/.env"
+    echo "=== Launching sequential sweep (detached) ==="
+    OUTDIR="{{outdir}}"
+    CONFIGS="{{configs}}"
+    TMPSCRIPT=$(mktemp)
+    printf '#!/bin/bash\ncd /workspace/agentx-mvp\nfor cfg in %s; do\n  IFS=: read -r P D <<< "$cfg"\n  NS=ecrncevi-dev-p${P}d${D}\n  echo "====== Sequential: P${P}:D${D} in $NS ======"\n  just setup-namespace "$NS"\n  NAMESPACE="$NS" just sweep "%s" "${P}:${D}"\n  just teardown-namespace "$NS"\ndone\n' "$CONFIGS" "$OUTDIR" > "$TMPSCRIPT"
+    kubectl cp "$TMPSCRIPT" "$NS/${POD}:/workspace/run_seed.sh"
+    rm -f "$TMPSCRIPT"
+    kubectl exec -n "$NS" "$POD" -- chmod +x /workspace/run_seed.sh
+    kubectl exec -n "$NS" "$POD" -- bash -c 'nohup bash /workspace/run_seed.sh </dev/null >/workspace/seed-sweep.log 2>&1 & echo $! > /workspace/seed-sweep.pid && echo "Launched PID $!"'
+    echo ""
+    echo "Sequential sweep running detached. Safe to disconnect."
+    echo "  Monitor:  just seed-logs"
+    echo "  Results:  just seed-results {{outdir}}"
+    echo "  Cleanup:  just seed-clean"
+
+# Tail the seed sweep log.
+seed-logs:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    POD=$(kubectl get pod -n {{NAMESPACE}} -l app={{seed_deploy}} -o jsonpath='{.items[0].metadata.name}')
+    kubectl exec -n {{NAMESPACE}} "$POD" -- tail -f /workspace/seed-sweep.log
+
+# Copy results from the seed pod to local.
+# Usage: just seed-results results_run1
+seed-results outdir:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    POD=$(kubectl get pod -n {{NAMESPACE}} -l app={{seed_deploy}} -o jsonpath='{.items[0].metadata.name}')
+    mkdir -p "{{outdir}}"
+    kubectl cp {{NAMESPACE}}/${POD}:/workspace/agentx-mvp/{{outdir}} "{{outdir}}" 2>/dev/null || true
+    echo "Results copied to {{outdir}}/"
+    # Regenerate interactivity chart locally
+    python3 gen_interactivity_chart.py "{{outdir}}" 2>/dev/null || true
+
+# Delete the seed orchestrator pod and RBAC.
+seed-clean:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    kubectl delete deploy {{seed_deploy}} -n {{NAMESPACE}} --ignore-not-found
+    kubectl delete clusterrolebinding benchmark-orchestrator --ignore-not-found
+    kubectl delete sa benchmark-orchestrator -n {{NAMESPACE}} --ignore-not-found
+    echo "Seed pod cleaned up."

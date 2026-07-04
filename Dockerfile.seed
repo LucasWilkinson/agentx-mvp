@@ -1,0 +1,30 @@
+FROM alpine:3.20
+
+RUN apk add --no-cache \
+    bash coreutils findutils grep tar curl git \
+    python3 \
+    gettext openssl
+
+# kubectl
+RUN curl -LO "https://dl.k8s.io/release/$(curl -sL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" \
+    && install kubectl /usr/local/bin/ && rm kubectl
+
+# helm
+RUN curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+# just
+RUN curl -fsSL https://just.systems/install.sh | bash -s -- --to /usr/local/bin
+
+# uv
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
+    && mv /root/.local/bin/uv /usr/local/bin/
+
+# Python venv with networking niceties
+RUN uv venv /opt/venv \
+    && VIRTUAL_ENV=/opt/venv uv pip install requests httpx pyyaml rich
+
+ENV VIRTUAL_ENV=/opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+WORKDIR /workspace
+CMD ["sleep", "infinity"]
