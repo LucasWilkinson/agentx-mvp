@@ -208,8 +208,9 @@ dump-logs dest=".":
 scrape-grafana +dirs:
     python3 export_dashboard.py results {{dirs}}
 
-# Scrape Grafana dashboards and generate interactivity chart in one shot.
-# Automatically finds all result directories containing profile_export_aiperf.json.
+# Scrape Grafana dashboards and generate interactivity chart.
+# Reads namespace.txt from each result directory to find the right Grafana instance.
+# Runs export_dashboard.py inside the aiperf pod via kubectl exec (no port-forward needed).
 # Usage: just report results_routing
 report outdir:
     #!/usr/bin/env bash
@@ -219,8 +220,304 @@ report outdir:
         echo "No result directories found in {{outdir}}"
         exit 1
     fi
-    python3 export_dashboard.py results $DIRS
+    SETUP_NAMESPACES=""
+    for dir in $DIRS; do
+        PARENT=$(dirname "$dir")
+        if [ -f "$PARENT/namespace.txt" ]; then
+            NS=$(cat "$PARENT/namespace.txt")
+        else
+            NS={{NAMESPACE}}
+        fi
+        # Copy script to pod once per namespace
+        if ! echo "$SETUP_NAMESPACES" | grep -q "|${NS}|"; then
+            POD=$(kubectl get pod -n "$NS" -l app={{deploy}} -o jsonpath='{.items[0].metadata.name}')
+            kubectl cp export_dashboard.py "$NS/${POD}:/workspace/export_dashboard.py"
+            SETUP_NAMESPACES="${SETUP_NAMESPACES}|${NS}|${POD}|"
+        fi
+        POD=$(echo "$SETUP_NAMESPACES" | grep -o "|${NS}|[^|]*|" | head -1 | cut -d'|' -f3)
+        GRAFANA_URL="http://grafana.${NS}.svc.cluster.local:80"
+        TIMESTAMPS=$(python3 extract_timestamps.py "$dir/profile_export_aiperf.json")
+        START=$(echo "$TIMESTAMPS" | head -1)
+        END=$(echo "$TIMESTAMPS" | tail -1)
+        NAME=$(basename "$dir")
+        echo "=== $NAME ($NS): scraping Grafana ==="
+        kubectl exec -n "$NS" "$POD" -- python3 /workspace/export_dashboard.py \
+            --grafana-url "$GRAFANA_URL" \
+            single --start "$START" --end "$END" -o "/workspace/dashboard_${NAME}.html" || {
+            echo "  WARNING: scrape failed for $NAME, skipping"
+            continue
+        }
+        kubectl cp "$NS/${POD}:/workspace/dashboard_${NAME}.html" "$dir/dashboard.html" 2>/dev/null || true
+        kubectl exec -n "$NS" "$POD" -- rm -f "/workspace/dashboard_${NAME}.html"
+    done
     python3 gen_interactivity_chart.py "{{outdir}}"
+
+# Bootstrap a new namespace with all resources needed for benchmarking.
+# Usage: just setup-namespace ecrncevi-dev-p2d2
+setup-namespace ns:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ROOT={{llm_d_root}}
+    echo "=== Creating namespace {{ns}} ==="
+    kubectl create namespace {{ns}} --dry-run=client -o yaml | kubectl apply -f -
+    # RBAC for prometheus and grafana sidecars
+    kubectl apply -n {{ns}} -f - <<'RBACEOF'
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: Role
+    metadata:
+      name: prometheus-server
+    rules:
+    - apiGroups: [""]
+      resources: [pods, services, endpoints]
+      verbs: [get, list, watch]
+    - apiGroups: [""]
+      resources: [configmaps]
+      verbs: [get]
+    ---
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: RoleBinding
+    metadata:
+      name: prometheus-server
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: Role
+      name: prometheus-server
+    subjects:
+    - kind: ServiceAccount
+      name: prometheus-server
+    ---
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: Role
+    metadata:
+      name: grafana-sidecar
+    rules:
+    - apiGroups: [""]
+      resources: [configmaps, secrets]
+      verbs: [get, list, watch]
+    ---
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: RoleBinding
+    metadata:
+      name: grafana-sidecar
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: Role
+      name: grafana-sidecar
+    subjects:
+    - kind: ServiceAccount
+      name: grafana
+    RBACEOF
+    # Copy HF token secret from source namespace, or create a dummy if source is gone
+    if kubectl get secret llm-d-hf-token -n {{NAMESPACE}} -o json 2>/dev/null \
+      | python3 -c "import json,sys; d=json.load(sys.stdin); d['metadata']={'name':'llm-d-hf-token','namespace':'{{ns}}'}; print(json.dumps(d))" \
+      | kubectl apply -f - 2>/dev/null; then
+        true
+    else
+        kubectl create secret generic llm-d-hf-token --from-literal=HF_TOKEN=dummy -n {{ns}} --dry-run=client -o yaml | kubectl apply -f -
+    fi
+    # Service account
+    kubectl apply -n {{ns}} -f "$ROOT/guides/wide-ep-lws/modelserver/gpu/vllm-glm-5.2/base/serviceAccount.yaml"
+    # Gateway (configmap + gateway via kustomize)
+    kubectl kustomize "$ROOT/guides/recipes/gateway/istio/" | kubectl apply -n {{ns}} -f -
+    # InferenceModel
+    kubectl apply -n {{ns}} -f - <<EOF
+    apiVersion: inference.networking.x-k8s.io/v1alpha2
+    kind: InferenceModel
+    metadata:
+      name: glm-5-2-fp8
+    spec:
+      criticality: Critical
+      modelName: zai-org/GLM-5.2-FP8
+      poolRef:
+        name: wide-ep-lws
+    EOF
+    # Prometheus
+    helm upgrade --install prometheus prometheus-community/prometheus \
+      -n {{ns}} --version 29.13.0 \
+      --set alertmanager.enabled=false \
+      --set kube-state-metrics.enabled=false \
+      --set prometheus-node-exporter.enabled=false \
+      --set prometheus-pushgateway.enabled=false \
+      --set rbac.create=false \
+      --set server.persistentVolume.enabled=false \
+      --set serviceAccounts.server.create=true \
+      --set serviceAccounts.server.name=prometheus-server \
+      --set 'server.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].key=kubernetes.io/arch' \
+      --set 'server.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].operator=In' \
+      --set 'server.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].values[0]=amd64' \
+      -f - <<PROMEOF
+    extraScrapeConfigs: |
+      - job_name: 'vllm-decode'
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - {{ns}}
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_llm_d_ai_role]
+            regex: decode
+            action: keep
+          - source_labels: [__meta_kubernetes_pod_container_name]
+            regex: vllm
+            action: keep
+          - source_labels: [__meta_kubernetes_pod_container_port_number]
+            regex: '8200'
+            action: keep
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+          - source_labels: [__meta_kubernetes_pod_node_name]
+            target_label: node
+          - source_labels: [__meta_kubernetes_pod_label_llm_d_ai_model]
+            target_label: model
+        scrape_interval: 1s
+        metrics_path: /metrics
+      - job_name: 'vllm-prefill'
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - {{ns}}
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_llm_d_ai_role]
+            regex: prefill
+            action: keep
+          - source_labels: [__meta_kubernetes_pod_container_name]
+            regex: vllm
+            action: keep
+          - source_labels: [__meta_kubernetes_pod_container_port_number]
+            regex: '8000'
+            action: keep
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+          - source_labels: [__meta_kubernetes_pod_node_name]
+            target_label: node
+          - source_labels: [__meta_kubernetes_pod_label_llm_d_ai_model]
+            target_label: model
+        scrape_interval: 1s
+        metrics_path: /metrics
+      - job_name: 'epp'
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - {{ns}}
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_inferencepool]
+            regex: .+
+            action: keep
+          - source_labels: [__meta_kubernetes_pod_ip]
+            target_label: __address__
+            replacement: '\${1}:9090'
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+          - source_labels: [__meta_kubernetes_pod_label_inferencepool]
+            target_label: inferencepool
+        scrape_interval: 1s
+        metrics_path: /metrics
+    PROMEOF
+    # Grafana
+    helm upgrade --install grafana grafana/grafana \
+      -n {{ns}} --version 10.5.15 \
+      --set adminPassword=admin \
+      --set persistence.enabled=false \
+      --set rbac.create=false \
+      --set sidecar.dashboards.enabled=true \
+      --set sidecar.dashboards.label=grafana_dashboard \
+      --set sidecar.dashboards.searchNamespace={{ns}} \
+      --set 'affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].key=kubernetes.io/arch' \
+      --set 'affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].operator=In' \
+      --set 'affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].values[0]=amd64' \
+      -f - <<GRAFEOF
+    datasources:
+      datasources.yaml:
+        apiVersion: 1
+        datasources:
+        - name: Prometheus
+          type: prometheus
+          url: http://prometheus-server.{{ns}}.svc.cluster.local
+          access: proxy
+          isDefault: true
+    GRAFEOF
+    # Copy dashboard ConfigMaps from source namespace
+    for cm in $(kubectl get configmaps -n {{NAMESPACE}} -l grafana_dashboard -o name); do
+        cmname=$(basename "$cm")
+        kubectl get "$cm" -n {{NAMESPACE}} -o json \
+          | python3 -c "import json,sys; d=json.load(sys.stdin); d['metadata']={'name':d['metadata']['name'],'namespace':'{{ns}}','labels':d['metadata'].get('labels',{})}; print(json.dumps(d))" \
+          | kubectl apply -f -
+    done
+    # Deploy aiperf runner
+    kubectl apply -f agentx.yaml -n {{ns}}
+    kubectl rollout status deploy/{{deploy}} -n {{ns}} --timeout=300s
+    echo "=== Namespace {{ns}} ready ==="
+
+# Free GPUs in a namespace by removing model serving, but keep prometheus/grafana alive.
+# Usage: just teardown-serving ecrncevi-dev-p2d2
+teardown-serving ns:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "=== Tearing down serving in {{ns}} (keeping monitoring) ==="
+    kubectl delete lws wide-ep-lws-nvidia-gpu-vllm-glm-5-2-prefill wide-ep-lws-nvidia-gpu-vllm-glm-5-2-decode -n {{ns}} --ignore-not-found 2>/dev/null || true
+    helm uninstall wide-ep-lws -n {{ns}} 2>/dev/null || true
+    echo "=== Serving removed from {{ns}} ==="
+
+# Fully tear down an isolated benchmark namespace (including monitoring).
+# Usage: just teardown-namespace ecrncevi-dev-p2d2
+teardown-namespace ns:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "=== Tearing down namespace {{ns}} ==="
+    kubectl delete lws wide-ep-lws-nvidia-gpu-vllm-glm-5-2-prefill wide-ep-lws-nvidia-gpu-vllm-glm-5-2-decode -n {{ns}} --ignore-not-found 2>/dev/null || true
+    helm uninstall wide-ep-lws -n {{ns}} 2>/dev/null || true
+    helm uninstall prometheus -n {{ns}} 2>/dev/null || true
+    helm uninstall grafana -n {{ns}} 2>/dev/null || true
+    kubectl delete namespace {{ns}} --ignore-not-found
+    echo "=== Namespace {{ns}} deleted ==="
+
+# Run sweep in an isolated namespace per P:D config.
+# Usage: just sweep-isolated results_run1 "2:2 1:1 2:1"
+sweep-isolated outdir configs duration="900":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p "{{outdir}}"
+    NAMESPACES=()
+    for cfg in {{configs}}; do
+        IFS=: read -r P D <<< "$cfg"
+        NS="{{NAMESPACE}}-p${P}d${D}"
+        dir="{{outdir}}/results_p${P}_d${D}"
+        # Skip if all concurrency results already exist
+        ALL_DONE=true
+        for C in 1 4 16 64; do
+            if [ ! -f "$dir/results_p${P}_d${D}_c${C}/profile_export_aiperf.json" ]; then
+                ALL_DONE=false
+                break
+            fi
+        done
+        if [ "$ALL_DONE" = true ]; then
+            echo "====== P${P}:D${D} — all concurrency levels done, skipping ======"
+            continue
+        fi
+        echo "====== Setting up P${P}:D${D} in namespace $NS ======"
+        just setup-namespace "$NS"
+        NAMESPACES+=("$NS")
+        # Run sweep for this single config in its own namespace (Grafana scraped in-pod)
+        NAMESPACE="$NS" just sweep "{{outdir}}" "${P}:${D}" {{duration}} &
+    done
+    # Wait for all parallel sweeps to complete
+    wait
+    echo "====== All sweeps complete ======"
+    # Free GPUs but keep prometheus/grafana for after-the-fact reporting
+    for NS in "${NAMESPACES[@]}"; do
+        just teardown-serving "$NS"
+    done
+    # Generate combined interactivity chart (dashboards already scraped per-sweep)
+    python3 gen_interactivity_chart.py "{{outdir}}" 2>/dev/null || true
+    echo ""
+    echo "Monitoring still running. To scrape dashboards after the fact:"
+    echo "  just report-ns <namespace> <outdir>"
+    echo "To fully clean up:"
+    for NS in "${NAMESPACES[@]}"; do
+        echo "  just teardown-namespace $NS"
+    done
 
 # Deploy PD: just start-pd <prefill_replicas> <decode_size> [max_tokens]
 # prefill_replicas = number of prefill pods
@@ -285,7 +582,6 @@ sweep outdir configs duration="900":
     NS={{NAMESPACE}}
     mkdir -p "{{outdir}}"
     just wipe
-    FIRST=true
     for cfg in {{configs}}; do
         IFS=: read -r P D <<< "$cfg"
         dir="{{outdir}}/results_p${P}_d${D}"
@@ -302,15 +598,12 @@ sweep outdir configs duration="900":
             continue
         fi
         echo "====== P${P}:D${D} ======"
-        if [ "$FIRST" = true ]; then
-            FIRST=false
-        else
-            just stop-pd
-        fi
+        just stop-pd
         just start-pd "$P" "$D"
         just check
         just warmup
         mkdir -p "$dir"
+        echo "$NS" > "$dir/namespace.txt"
         kubectl get pod -n "$NS" -l llm-d.ai/role=prefill -o yaml > "$dir/prefill.yaml"
         kubectl get pod -n "$NS" -l llm-d.ai/role=decode -o yaml > "$dir/decode.yaml"
         kubectl get pod -n "$NS" -l llm-d-router-gateway=wide-ep-lws-epp -o yaml > "$dir/epp.yaml" 2>/dev/null || true
@@ -322,17 +615,6 @@ sweep outdir configs duration="900":
         just stop-pd
     done
 
-    # Export Grafana dashboards for all result dirs
-    RESULT_DIRS=$(find "{{outdir}}" -maxdepth 2 -name "profile_export_aiperf.json" -exec dirname {} \;)
-    if [ -n "$RESULT_DIRS" ]; then
-        echo "====== Scraping Grafana dashboards ======"
-        if python3 export_dashboard.py results $RESULT_DIRS 2>/dev/null; then
-            echo "====== Generating interactivity chart ======"
-            python3 gen_interactivity_chart.py "{{outdir}}"
-        else
-            echo ""
-            echo "WARNING: Grafana not reachable. Run manually when port-forward is up:"
-            echo "  just scrape-grafana $RESULT_DIRS"
-            echo "  python3 gen_interactivity_chart.py {{outdir}}"
-        fi
-    fi
+    # Export Grafana dashboards via in-pod scraping
+    echo "====== Scraping Grafana dashboards ======"
+    just report "{{outdir}}" || echo "WARNING: Dashboard scrape failed. Run manually: just report {{outdir}}"
