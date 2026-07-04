@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
 import argparse
 import base64
+import concurrent.futures
 import json
+import os
 import re
+import threading
 import time
 import urllib.request
 import urllib.error
 import urllib.parse
 from datetime import datetime, timezone
+
+_http_semaphore = threading.Semaphore(32)
 
 
 def parse_relative_time(s):
@@ -44,8 +49,9 @@ def grafana_request(base_url, path, auth, data=None):
     }
     body = json.dumps(data).encode() if data else None
     req = urllib.request.Request(url, data=body, headers=headers)
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read())
+    with _http_semaphore:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read())
 
 
 def extract_panels(panels):
@@ -108,12 +114,10 @@ def export(args):
         elif p.get("targets"):
             row_order.append({"type": "panel", "id": p["id"]})
 
-    panel_data = {}
-    for panel in query_panels:
+    def query_panel(panel):
         pid = panel["id"]
         title = panel.get("title", f"panel-{pid}")
         unit = panel.get("fieldConfig", {}).get("defaults", {}).get("unit", "")
-        print(f"  [{pid}] {title} ", end="", flush=True)
 
         queries = []
         for target in panel.get("targets", []):
@@ -135,14 +139,19 @@ def export(args):
             queries.append({"expr": expr, "legend": legend, "series": series})
 
         total_points = sum(len(s["values"]) for q in queries for s in q["series"])
-        print(f"({len(queries)} queries, {total_points} datapoints)")
+        print(f"  [{pid}] {title} ({len(queries)} queries, {total_points} datapoints)")
 
-        panel_data[pid] = {
+        return pid, {
             "id": pid,
             "title": title,
             "unit": unit,
             "queries": queries,
         }
+
+    panel_data = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(query_panels)) as pool:
+        for pid, data in pool.map(query_panel, query_panels):
+            panel_data[pid] = data
 
     ts_start = datetime.fromtimestamp(start, tz=timezone.utc).strftime("%Y%m%dT%H%M%S")
     ts_end = datetime.fromtimestamp(end, tz=timezone.utc).strftime("%Y%m%dT%H%M%S")
@@ -306,8 +315,7 @@ function renderPanel(container, p) {{
 
 
 def export_results(args):
-    import os
-
+    tasks = []
     for d in args.dirs:
         d = os.path.abspath(d)
         json_path = os.path.join(d, "profile_export_aiperf.json")
@@ -325,17 +333,27 @@ def export_results(args):
 
         out_path = os.path.join(d, "dashboard.html")
         name = os.path.basename(d)
-        print(f"\n{'='*60}")
-        print(f"{name}: {datetime.fromtimestamp(start, tz=timezone.utc).strftime('%H:%M:%S')} → "
-              f"{datetime.fromtimestamp(end, tz=timezone.utc).strftime('%H:%M:%S')} "
-              f"(±{args.pad}s pad)")
-
-        export(argparse.Namespace(
+        tasks.append((name, start, end, args.pad, argparse.Namespace(
             start=str(start), end=str(end),
             deployment=args.deployment, step=args.step,
             grafana_url=args.grafana_url, auth=args.auth,
             output=out_path, dashboard=args.dashboard,
-        ))
+        )))
+
+    if not tasks:
+        return
+
+    def run_one(task):
+        name, start, end, pad, ns = task
+        print(f"\n{'='*60}")
+        print(f"{name}: {datetime.fromtimestamp(start, tz=timezone.utc).strftime('%H:%M:%S')} → "
+              f"{datetime.fromtimestamp(end, tz=timezone.utc).strftime('%H:%M:%S')} "
+              f"(±{pad}s pad)")
+        export(ns)
+
+    print(f"Exporting {len(tasks)} directories in parallel...")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(tasks)) as pool:
+        list(pool.map(run_one, tasks))
 
 
 def main():

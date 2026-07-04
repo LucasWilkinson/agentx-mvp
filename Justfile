@@ -59,21 +59,54 @@ warmup:
     echo "Warmup complete."
 
 # Run the AgentX-MVP benchmark. Args: [concurrency] [duration-seconds].
+# Launches detached inside the pod and polls for completion to survive kubectl connection drops.
 run concurrency=concurrency duration=duration:
-    kubectl exec -n {{NAMESPACE}} deploy/{{deploy}} -- \
-      aiperf profile \
-        --scenario inferencex-agentx-mvp \
-        --url {{url}} \
-        --model {{model}} \
-        --max-context-length 128000 \
-        --endpoint-type chat \
-        --streaming \
-        --use-server-token-count \
-        --public-dataset semianalysis_cc_traces_weka_with_subagents \
-        --concurrency {{concurrency}} \
-        --benchmark-duration {{duration}} \
-        --output-artifact-dir /workspace/artifacts \
-        --ui simple
+    #!/usr/bin/env bash
+    set -euo pipefail
+    NS={{NAMESPACE}}
+    DEPLOY={{deploy}}
+    POD=$(kubectl get pod -n "$NS" -l app=$DEPLOY -o jsonpath='{.items[0].metadata.name}')
+    # Kill any existing benchmark before launching a new one
+    kubectl exec -n "$NS" "$POD" -- bash -c '
+      for f in /proc/[0-9]*/cmdline; do
+        pid=${f#/proc/}; pid=${pid%/cmdline}
+        tr "\0" " " < "$f" 2>/dev/null | grep -q "aiperf" && kill -9 "$pid" 2>/dev/null
+      done
+      rm -f /workspace/aiperf.pid /workspace/aiperf.exit_code
+    ' 2>/dev/null || true
+    # Write benchmark script into the pod, then launch fully detached
+    SCRIPT="#!/bin/bash
+    aiperf profile \
+      --scenario inferencex-agentx-mvp \
+      --url '{{url}}' \
+      --model '{{model}}' \
+      --max-context-length 128000 \
+      --endpoint-type chat \
+      --streaming \
+      --use-server-token-count \
+      --public-dataset semianalysis_cc_traces_weka_with_subagents \
+      --concurrency {{concurrency}} \
+      --benchmark-duration {{duration}} \
+      --output-artifact-dir /workspace/artifacts \
+      --ui simple \
+      > /workspace/aiperf.log 2>&1
+    echo \$? > /workspace/aiperf.exit_code
+    rm -f /workspace/aiperf.pid"
+    kubectl exec -n "$NS" "$POD" -- bash -c "echo '$SCRIPT' > /workspace/run_benchmark.sh && chmod +x /workspace/run_benchmark.sh"
+    kubectl exec -n "$NS" "$POD" -- bash -c 'nohup bash /workspace/run_benchmark.sh </dev/null >/dev/null 2>&1 & echo $! > /workspace/aiperf.pid && echo "Launched PID $!"'
+    # Poll for completion — pid file is removed when the benchmark finishes
+    echo "Benchmark running detached (polling every 30s)..."
+    while kubectl exec -n "$NS" "$POD" -- test -f /workspace/aiperf.pid 2>/dev/null; do
+        kubectl exec -n "$NS" "$POD" -- tail -1 /workspace/aiperf.log 2>/dev/null || true
+        sleep 30
+    done
+    echo "Benchmark process finished."
+    EXIT_CODE=$(kubectl exec -n "$NS" "$POD" -- cat /workspace/aiperf.exit_code 2>/dev/null || echo "1")
+    kubectl exec -n "$NS" "$POD" -- tail -20 /workspace/aiperf.log || true
+    if [ "$EXIT_CODE" != "0" ]; then
+        echo "ERROR: Benchmark exited with code $EXIT_CODE"
+        exit 1
+    fi
 
 # Fast plumbing validation (~60s). Uses --unsafe-override so it runs below the
 # scenario's 900s minimum; result is marked submission_valid: false.
@@ -96,8 +129,23 @@ smoke:
 
 # Copy benchmark artifacts out of the runner to a local directory (default ./results).
 results dest="./results":
-    mkdir -p {{dest}}
-    kubectl cp {{NAMESPACE}}/$(kubectl get pod -n {{NAMESPACE}} -l app={{deploy}} -o jsonpath='{.items[0].metadata.name}'):/workspace/artifacts {{dest}}
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p "{{dest}}"
+    POD=$(kubectl get pod -n {{NAMESPACE}} -l app={{deploy}} -o jsonpath='{.items[0].metadata.name}')
+    # kubectl cp often exits non-zero due to a spurious tar stream error; retry individual files if needed
+    kubectl cp {{NAMESPACE}}/${POD}:/workspace/artifacts "{{dest}}" 2>/dev/null || true
+    # Verify the critical file arrived; if not, copy it directly
+    if [ ! -f "{{dest}}/profile_export_aiperf.json" ]; then
+        kubectl cp {{NAMESPACE}}/${POD}:/workspace/artifacts/profile_export_aiperf.json "{{dest}}/profile_export_aiperf.json" 2>/dev/null || true
+    fi
+    if [ ! -f "{{dest}}/profile_export.jsonl" ]; then
+        kubectl cp {{NAMESPACE}}/${POD}:/workspace/artifacts/profile_export.jsonl "{{dest}}/profile_export.jsonl" 2>/dev/null || true
+    fi
+    if [ ! -f "{{dest}}/profile_export_aiperf.json" ]; then
+        echo "ERROR: profile_export_aiperf.json not found after copy"
+        exit 1
+    fi
 
 # Delete benchmark artifacts from the runner pod.
 wipe:
@@ -139,7 +187,7 @@ dump-logs dest=".":
         kubectl logs -n "$NS" "$pod" --all-containers > "{{dest}}/logs/${pod}.log" 2>&1 || true
     done
     # EPP
-    for pod in $(kubectl get pods -n "$NS" -l app.kubernetes.io/name=epp -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
+    for pod in $(kubectl get pods -n "$NS" -l llm-d-router-gateway=wide-ep-lws-epp -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
         echo "  logs: $pod"
         kubectl logs -n "$NS" "$pod" --all-containers > "{{dest}}/logs/${pod}.log" 2>&1 || true
     done
@@ -161,9 +209,17 @@ scrape-grafana +dirs:
     python3 export_dashboard.py results {{dirs}}
 
 # Scrape Grafana dashboards and generate interactivity chart in one shot.
-# Usage: just report results_routing results_routing/results_p2_d2/results_p2_d2_c1 ...
-report outdir +dirs:
-    python3 export_dashboard.py results {{dirs}}
+# Automatically finds all result directories containing profile_export_aiperf.json.
+# Usage: just report results_routing
+report outdir:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    DIRS=$(find "{{outdir}}" -name "profile_export_aiperf.json" -exec dirname {} \;)
+    if [ -z "$DIRS" ]; then
+        echo "No result directories found in {{outdir}}"
+        exit 1
+    fi
+    python3 export_dashboard.py results $DIRS
     python3 gen_interactivity_chart.py "{{outdir}}"
 
 # Deploy PD: just start-pd <prefill_replicas> <decode_size> [max_tokens]
@@ -257,7 +313,10 @@ sweep outdir configs duration="900":
         mkdir -p "$dir"
         kubectl get pod -n "$NS" -l llm-d.ai/role=prefill -o yaml > "$dir/prefill.yaml"
         kubectl get pod -n "$NS" -l llm-d.ai/role=decode -o yaml > "$dir/decode.yaml"
-        kubectl get pod -n "$NS" -l app.kubernetes.io/name=epp -o yaml > "$dir/epp.yaml" 2>/dev/null || true
+        kubectl get pod -n "$NS" -l llm-d-router-gateway=wide-ep-lws-epp -o yaml > "$dir/epp.yaml" 2>/dev/null || true
+        kubectl get inferencepool -n "$NS" -o yaml > "$dir/inferencepool.yaml" 2>/dev/null || true
+        kubectl get httproute -n "$NS" -o yaml > "$dir/httproute.yaml" 2>/dev/null || true
+        kubectl get configmap wide-ep-lws-epp -n "$NS" -o yaml > "$dir/epp-config.yaml" 2>/dev/null || true
         just vllm-version "$dir"
         just sweep-concurrency "p${P}_d${D}" "$dir" {{duration}}
         just stop-pd

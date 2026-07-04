@@ -71,7 +71,11 @@ def discover_configs(results_dir):
                 'itl_p50': d['inter_token_latency']['p50'],
                 'itl_p99': d['inter_token_latency']['p99'],
                 'otpu': d['output_token_throughput_per_user']['avg'],
-                'ttft': d['time_to_first_token']['avg'],
+                'ttft_avg': d['time_to_first_token']['avg'],
+                'ttft_p50': d['time_to_first_token']['p50'],
+                'ttft_p99': d['time_to_first_token']['p99'],
+                'ttft_min': d['time_to_first_token']['min'],
+                'ttft_max': d['time_to_first_token']['max'],
             }
 
         if not runs:
@@ -84,11 +88,12 @@ def discover_configs(results_dir):
                 version = vf.read().strip()
 
         yamls = {}
-        for yname in ('prefill.yaml', 'decode.yaml'):
-            ypath = os.path.join(config_dir, yname)
-            if os.path.isfile(ypath):
-                with open(ypath) as yf:
-                    yamls[yname] = yf.read()
+        for yname in sorted(os.listdir(config_dir)):
+            if yname.endswith('.yaml') or yname.endswith('.yml'):
+                ypath = os.path.join(config_dir, yname)
+                if os.path.isfile(ypath):
+                    with open(ypath) as yf:
+                        yamls[yname] = yf.read()
 
         configs[config_name] = {
             'label': f'{n_prefill}P {n_decode}D',
@@ -406,7 +411,7 @@ function hoverText(config, c, d, normalized) {{
     `ITL p50: ${{d.itl_p50.toFixed(1)}} ms<br>` +
     `ITL p99: ${{d.itl_p99.toFixed(1)}} ms<br>` +
     `Per-user: ${{d.otpu.toFixed(1)}} tok/s/user<br>` +
-    `TTFT: ${{(d.ttft/1000).toFixed(1)}} s`;
+    `TTFT avg: ${{(d.ttft_avg/1000).toFixed(1)}}s · p50: ${{(d.ttft_p50/1000).toFixed(1)}}s · p99: ${{(d.ttft_p99/1000).toFixed(1)}}s`;
 }}
 
 function buildTraces(configs, concurrencies, data, xFn, yFn, normalized) {{
@@ -459,7 +464,7 @@ const sec2 = makeSection('Data Summary', 'sec-table');
 (function() {{
   const div = document.createElement('div');
   div.className = 'summary';
-  let html = '<table><tr><th>Config</th><th>Concurrency</th><th>Decode GPUs</th><th>Output tok/s</th><th>tok/s/GPU</th><th>ITL p50 (ms)</th><th>ITL p99 (ms)</th><th>Per-user tok/s</th><th>TTFT (s)</th></tr>';
+  let html = '<table><tr><th>Config</th><th>Concurrency</th><th>Decode GPUs</th><th>Output tok/s</th><th>tok/s/GPU</th><th>ITL p50 (ms)</th><th>ITL p99 (ms)</th><th>Per-user tok/s</th><th>TTFT avg (s)</th><th>TTFT p50 (s)</th><th>TTFT p99 (s)</th><th>TTFT min (s)</th><th>TTFT max (s)</th></tr>';
   for (const [cfg, meta] of Object.entries(CONFIGS)) {{
     for (const c of CONCURRENCIES) {{
       if (!DATA[cfg] || !DATA[cfg][c]) continue;
@@ -474,7 +479,11 @@ const sec2 = makeSection('Data Summary', 'sec-table');
         `<td>${{d.itl_p50.toFixed(1)}}</td>` +
         `<td>${{d.itl_p99.toFixed(1)}}</td>` +
         `<td>${{d.otpu.toFixed(1)}}</td>` +
-        `<td>${{(d.ttft/1000).toFixed(1)}}</td>` +
+        `<td>${{(d.ttft_avg/1000).toFixed(1)}}</td>` +
+        `<td>${{(d.ttft_p50/1000).toFixed(1)}}</td>` +
+        `<td>${{(d.ttft_p99/1000).toFixed(1)}}</td>` +
+        `<td>${{(d.ttft_min/1000).toFixed(1)}}</td>` +
+        `<td>${{(d.ttft_max/1000).toFixed(1)}}</td>` +
         `</tr>`;
     }}
   }}
