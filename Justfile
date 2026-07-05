@@ -589,7 +589,11 @@ sweep-concurrency prefix="sweep" dest="." duration="900":
         fi
         just results "$RDIR"
         just dump-logs "$RDIR"
-        just report "{{dest}}" || echo "WARNING: Dashboard scrape failed for c${C}"
+        for attempt in 1 2 3 4 5; do
+            if just report "{{dest}}"; then break; fi
+            echo "Dashboard scrape attempt $attempt failed for c${C}, retrying in 10s..."
+            sleep 10
+        done
         just wipe
         sleep 10
     done
