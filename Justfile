@@ -258,7 +258,7 @@ report outdir:
         kubectl cp "$NS/${POD}:/workspace/dashboard_${NAME}.html" "$dir/dashboard.html" 2>/dev/null || true
         kubectl exec -n "$NS" "$POD" -- rm -f "/workspace/dashboard_${NAME}.html"
     done
-    python3 gen_interactivity_chart.py "{{outdir}}"
+    python3 gen_interactivity_chart.py "$(dirname "{{outdir}}")" 2>/dev/null || true
 
 # Bootstrap a new namespace with all resources needed for benchmarking.
 # Usage: just setup-namespace ecrncevi-dev-p2d2
