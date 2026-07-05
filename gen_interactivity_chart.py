@@ -142,7 +142,7 @@ def highlight_yaml(text):
     return '\n'.join(out)
 
 
-def generate_html(configs, output_path):
+def generate_html(configs, output_path, results_dir):
     color_map = {}
     for i, cfg in enumerate(sorted(configs.keys())):
         color_map[cfg] = COLORS[i % len(COLORS)]
@@ -169,7 +169,7 @@ def generate_html(configs, output_path):
     versions = set(meta['version'] for meta in configs.values() if meta['version'])
     version_str = ', '.join(sorted(versions)) if versions else 'unknown'
 
-    results_dir = os.path.join(os.path.dirname(os.path.abspath(output_path)), 'results')
+    results_dir = os.path.abspath(results_dir)
     embedded_dashboards = {}
     for cfg in configs:
         for c_val in configs[cfg]['runs']:
@@ -307,19 +307,29 @@ const sidePanelFrame = document.getElementById('sidePanelFrame');
 const sidePanelTitle = document.getElementById('sidePanelTitle');
 const overlay = document.getElementById('overlay');
 
-let currentBlobUrl = null;
+const blobCache = {{}};
+
+// Pre-decode all dashboards in the background so clicks are instant
+setTimeout(() => {{
+  for (const [key, b64] of Object.entries(DASHBOARDS)) {{
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    blobCache[key] = URL.createObjectURL(new Blob([bytes], {{ type: 'text/html;charset=utf-8' }}));
+  }}
+}}, 100);
 
 function openDashboard(cfg, conc) {{
-  const b64 = DASHBOARDS[cfg + '_' + conc];
-  if (!b64) return;
-  if (currentBlobUrl) URL.revokeObjectURL(currentBlobUrl);
-  const bin = atob(b64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  const blob = new Blob([bytes], {{ type: 'text/html;charset=utf-8' }});
-  currentBlobUrl = URL.createObjectURL(blob);
+  const key = cfg + '_' + conc;
+  if (!DASHBOARDS[key]) return;
+  if (!blobCache[key]) {{
+    const bin = atob(DASHBOARDS[key]);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    blobCache[key] = URL.createObjectURL(new Blob([bytes], {{ type: 'text/html;charset=utf-8' }}));
+  }}
   sidePanelTitle.textContent = `${{CONFIGS[cfg].label}} @ c${{C_LABELS[conc]}} — Dashboard`;
-  sidePanelFrame.src = currentBlobUrl;
+  sidePanelFrame.src = blobCache[key];
   sidePanel.classList.add('open');
   overlay.classList.add('open');
 }}
@@ -327,7 +337,6 @@ function openDashboard(cfg, conc) {{
 function closeDashboard() {{
   sidePanel.classList.remove('open');
   overlay.classList.remove('open');
-  if (currentBlobUrl) {{ URL.revokeObjectURL(currentBlobUrl); currentBlobUrl = null; }}
   sidePanelFrame.src = 'about:blank';
 }}
 
@@ -521,7 +530,7 @@ def main():
     output_dir = os.path.dirname(os.path.abspath(results_dir))
     output_path = os.path.join(output_dir, 'interactivity_vs_throughput.html')
 
-    generate_html(configs, output_path)
+    generate_html(configs, output_path, results_dir)
 
     print(f"Discovered {len(configs)} configs:")
     for cfg, meta in sorted(configs.items()):

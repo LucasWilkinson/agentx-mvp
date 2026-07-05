@@ -47,16 +47,24 @@ warmup:
     #!/usr/bin/env bash
     set -euo pipefail
     echo "Warming up model (this can take several minutes on first request)..."
-    kubectl exec -n {{NAMESPACE}} deploy/{{deploy}} -- \
-      python -c "
+    attempt=0
+    while true; do
+        attempt=$((attempt + 1))
+        if kubectl exec -n {{NAMESPACE}} deploy/{{deploy}} -- \
+          python -c "
     import urllib.request, json
     req = urllib.request.Request('{{url}}/chat/completions',
         data=json.dumps({'model':'{{model}}','messages':[{'role':'user','content':'Hi'}],'max_tokens':8}).encode(),
         headers={'Content-Type':'application/json'})
     resp = urllib.request.urlopen(req, timeout=600).read().decode()
     print(resp)
-    "
-    echo "Warmup complete."
+    "; then
+            echo "Warmup complete."
+            break
+        fi
+        echo "Warmup attempt $attempt failed, retrying in 30s..."
+        sleep 30
+    done
 
 # Run the AgentX-MVP benchmark. Args: [concurrency] [duration-seconds].
 # Launches detached inside the pod and polls for completion to survive kubectl connection drops.
@@ -440,15 +448,14 @@ setup-namespace ns:
           access: proxy
           isDefault: true
     GRAFEOF
-    # Apply Grafana dashboards from llm-d repo
-    DASH_DIR="$ROOT/guides/wide-ep-lws/modelserver/gpu/vllm-glm-5.2/base"
+    # Apply Grafana dashboards
     kubectl create configmap wideep-overview-dashboard \
-        --from-file=wideep-overview.json="$DASH_DIR/grafana-wideep-overview.json" \
+        --from-file=wideep-overview.json=dashboards/grafana-wideep-overview.json \
         -n {{ns}} --dry-run=client -o yaml \
       | kubectl label --local -f - grafana_dashboard=1 -o yaml \
       | kubectl apply -f -
     kubectl create configmap aggregate-overview-dashboard \
-        --from-file=aggregate-overview.json="$DASH_DIR/grafana-aggregate.json" \
+        --from-file=aggregate-overview.json=dashboards/grafana-aggregate.json \
         -n {{ns}} --dry-run=client -o yaml \
       | kubectl label --local -f - grafana_dashboard=1 -o yaml \
       | kubectl apply -f -
@@ -547,7 +554,6 @@ start-pd prefill_replicas decode_size:
         --set provider.name=istio \
         --set router.epp.image.tag=v0.9.0 \
         --set 'router.epp.flags.metrics-endpoint-auth=false' \
-        --set 'router.epp.flags.secure-serving=false' \
         -n {{NAMESPACE}} --version v0.9.0
     # Deploy prefill/decode LWS
     PREFILL_REPLICAS={{prefill_replicas}} envsubst '${PREFILL_REPLICAS}' < {{pd_prefill}} | kubectl apply -n {{NAMESPACE}} -f -
@@ -566,7 +572,8 @@ stop-pd:
 # Usage: just sweep-concurrency p2_d1
 sweep-concurrency prefix="sweep" dest="." duration="900":
     #!/usr/bin/env bash
-    set -euo pipefail
+    set -uo pipefail
+    FAILED=""
     for C in 1 4 16 64; do
         RDIR="{{dest}}/results_{{prefix}}_c${C}"
         if [ -f "$RDIR/profile_export_aiperf.json" ]; then
@@ -574,13 +581,21 @@ sweep-concurrency prefix="sweep" dest="." duration="900":
             continue
         fi
         echo "=== concurrency=$C ({{duration}}s) ==="
-        just warmup
-        just run $C {{duration}}
+        if ! just warmup || ! just run $C {{duration}}; then
+            echo "FAILED: concurrency=$C, skipping"
+            FAILED="${FAILED} c${C}"
+            just wipe 2>/dev/null || true
+            continue
+        fi
         just results "$RDIR"
         just dump-logs "$RDIR"
+        just report "{{dest}}" || echo "WARNING: Dashboard scrape failed for c${C}"
         just wipe
         sleep 10
     done
+    if [ -n "$FAILED" ]; then
+        echo "Failed concurrency levels:${FAILED}"
+    fi
 
 # Full sweep: deploy each P:D config, run concurrency sweep, tear down.
 # Configs are space-separated P:D pairs.
@@ -624,10 +639,6 @@ sweep outdir configs duration="900":
         just stop-pd
     done
 
-    # Export Grafana dashboards via in-pod scraping
-    echo "====== Scraping Grafana dashboards ======"
-    just report "{{outdir}}" || echo "WARNING: Dashboard scrape failed. Run manually: just report {{outdir}}"
-
 seed_image := "quay.io/rh-ee-ecrncevi/benchmark-seed:amd64"
 seed_deploy := "benchmark-seed"
 
@@ -656,11 +667,12 @@ seed outdir configs:
     set -euo pipefail
     NS={{NAMESPACE}}
     ROOT={{llm_d_root}}
-    POD=$(kubectl get pod -n "$NS" -l app={{seed_deploy}} -o jsonpath='{.items[0].metadata.name}')
+    DEPLOY=deploy/{{seed_deploy}}
     # Ensure helm repos are configured (survives pod restarts)
-    kubectl exec -n "$NS" "$POD" -- helm repo add prometheus-community https://prometheus-community.github.io/helm-charts 2>/dev/null
-    kubectl exec -n "$NS" "$POD" -- helm repo add grafana https://grafana.github.io/helm-charts 2>/dev/null
-    kubectl exec -n "$NS" "$POD" -- helm repo update
+    kubectl exec -n "$NS" "$DEPLOY" -- helm repo add prometheus-community https://prometheus-community.github.io/helm-charts 2>/dev/null
+    kubectl exec -n "$NS" "$DEPLOY" -- helm repo add grafana https://grafana.github.io/helm-charts 2>/dev/null
+    kubectl exec -n "$NS" "$DEPLOY" -- helm repo update
+    POD=$(kubectl get pod -n "$NS" -l app={{seed_deploy}} -o jsonpath='{.items[0].metadata.name}')
     echo "=== Syncing files to seed pod ==="
     # Create directory structure
     kubectl exec -n "$NS" "$POD" -- mkdir -p \
@@ -674,14 +686,16 @@ seed outdir configs:
     for f in Justfile agentx.yaml dashboard.json extract_timestamps.py export_dashboard.py gen_interactivity_chart.py overlay_dashboards.py; do
         [ -f "$f" ] && kubectl cp "$f" "$NS/${POD}:/workspace/agentx-mvp/$f"
     done
+    kubectl exec -n "$NS" "$POD" -- mkdir -p /workspace/agentx-mvp/dashboards
+    for f in dashboards/*.json; do
+        kubectl cp "$f" "$NS/${POD}:/workspace/agentx-mvp/$f"
+    done
     # Copy llm-d files
     LLM_D_FILES=(
         guides/env.sh
         guides/wide-ep-lws/modelserver/gpu/vllm-glm-5.2/base/prefill.yaml
         guides/wide-ep-lws/modelserver/gpu/vllm-glm-5.2/base/decode.yaml
         guides/wide-ep-lws/modelserver/gpu/vllm-glm-5.2/base/serviceAccount.yaml
-        guides/wide-ep-lws/modelserver/gpu/vllm-glm-5.2/base/grafana-wideep-overview.json
-        guides/wide-ep-lws/modelserver/gpu/vllm-glm-5.2/base/grafana-aggregate.json
         guides/recipes/gateway/base/kustomization.yaml
         guides/recipes/gateway/base/gateway.yaml
         guides/recipes/gateway/istio/kustomization.yaml
@@ -724,11 +738,12 @@ seed-sequential outdir configs:
     set -euo pipefail
     NS={{NAMESPACE}}
     ROOT={{llm_d_root}}
-    POD=$(kubectl get pod -n "$NS" -l app={{seed_deploy}} -o jsonpath='{.items[0].metadata.name}')
+    DEPLOY=deploy/{{seed_deploy}}
     # Ensure helm repos are configured (survives pod restarts)
-    kubectl exec -n "$NS" "$POD" -- helm repo add prometheus-community https://prometheus-community.github.io/helm-charts 2>/dev/null
-    kubectl exec -n "$NS" "$POD" -- helm repo add grafana https://grafana.github.io/helm-charts 2>/dev/null
-    kubectl exec -n "$NS" "$POD" -- helm repo update
+    kubectl exec -n "$NS" "$DEPLOY" -- helm repo add prometheus-community https://prometheus-community.github.io/helm-charts 2>/dev/null
+    kubectl exec -n "$NS" "$DEPLOY" -- helm repo add grafana https://grafana.github.io/helm-charts 2>/dev/null
+    kubectl exec -n "$NS" "$DEPLOY" -- helm repo update
+    POD=$(kubectl get pod -n "$NS" -l app={{seed_deploy}} -o jsonpath='{.items[0].metadata.name}')
     echo "=== Syncing files to seed pod ==="
     kubectl exec -n "$NS" "$POD" -- mkdir -p \
         /workspace/agentx-mvp \
@@ -740,13 +755,15 @@ seed-sequential outdir configs:
     for f in Justfile agentx.yaml dashboard.json extract_timestamps.py export_dashboard.py gen_interactivity_chart.py overlay_dashboards.py; do
         [ -f "$f" ] && kubectl cp "$f" "$NS/${POD}:/workspace/agentx-mvp/$f"
     done
+    kubectl exec -n "$NS" "$POD" -- mkdir -p /workspace/agentx-mvp/dashboards
+    for f in dashboards/*.json; do
+        kubectl cp "$f" "$NS/${POD}:/workspace/agentx-mvp/$f"
+    done
     LLM_D_FILES=(
         guides/env.sh
         guides/wide-ep-lws/modelserver/gpu/vllm-glm-5.2/base/prefill.yaml
         guides/wide-ep-lws/modelserver/gpu/vllm-glm-5.2/base/decode.yaml
         guides/wide-ep-lws/modelserver/gpu/vllm-glm-5.2/base/serviceAccount.yaml
-        guides/wide-ep-lws/modelserver/gpu/vllm-glm-5.2/base/grafana-wideep-overview.json
-        guides/wide-ep-lws/modelserver/gpu/vllm-glm-5.2/base/grafana-aggregate.json
         guides/recipes/gateway/base/kustomization.yaml
         guides/recipes/gateway/base/gateway.yaml
         guides/recipes/gateway/istio/kustomization.yaml
@@ -792,11 +809,23 @@ seed-logs:
 seed-results outdir:
     #!/usr/bin/env bash
     set -euo pipefail
-    POD=$(kubectl get pod -n {{NAMESPACE}} -l app={{seed_deploy}} -o jsonpath='{.items[0].metadata.name}')
-    mkdir -p "{{outdir}}"
-    kubectl cp {{NAMESPACE}}/${POD}:/workspace/agentx-mvp/{{outdir}} "{{outdir}}" 2>/dev/null || true
+    NS={{NAMESPACE}}
+    POD=$(kubectl get pod -n "$NS" -l app={{seed_deploy}} -o jsonpath='{.items[0].metadata.name}')
+    # Copy each result directory individually to avoid kubectl cp dropping files
+    DIRS=$(kubectl exec -n "$NS" "$POD" -- find /workspace/agentx-mvp/{{outdir}} -name "profile_export_aiperf.json" -exec dirname {} \; 2>/dev/null)
+    for dir in $DIRS; do
+        LOCAL=${dir#/workspace/agentx-mvp/}
+        mkdir -p "$LOCAL"
+        kubectl cp "$NS/${POD}:${dir}" "$LOCAL" 2>/dev/null || true
+    done
+    # Also copy non-result files (namespace.txt, yamls, etc.)
+    EXTRAS=$(kubectl exec -n "$NS" "$POD" -- find /workspace/agentx-mvp/{{outdir}} -maxdepth 2 \( -name "*.yaml" -o -name "*.txt" -o -name "*.html" \) 2>/dev/null)
+    for f in $EXTRAS; do
+        LOCAL=${f#/workspace/agentx-mvp/}
+        mkdir -p "$(dirname "$LOCAL")"
+        kubectl cp "$NS/${POD}:${f}" "$LOCAL" 2>/dev/null || true
+    done
     echo "Results copied to {{outdir}}/"
-    # Regenerate interactivity chart locally
     python3 gen_interactivity_chart.py "{{outdir}}" 2>/dev/null || true
 
 # Stop the running sweep, tear down all benchmark namespaces, and clean up the seed pod.

@@ -321,6 +321,41 @@ if (rows.length === 0) {{
   }}
 }}
 
+const lazyObserver = new IntersectionObserver((entries) => {{
+  entries.forEach(entry => {{
+    if (entry.isIntersecting) {{
+      const div = entry.target;
+      lazyObserver.unobserve(div);
+      const p = div._panelData;
+      const allSeries = p.queries.flatMap(q => q.series.map(s => ({{q, s}})));
+      const plotDiv = div.querySelector('.plot');
+      const traces = allSeries.filter(x => x.s.values.length > 0).map((x, i) => ({{
+        x: x.s.values.map(v => new Date(v[0] * 1000)),
+        y: x.s.values.map(v => parseFloat(v[1])),
+        name: seriesLabel(x.q, x.s),
+        type: 'scatter',
+        mode: 'lines',
+        line: {{ width: 1.5, color: COLORS[i % COLORS.length] }},
+        hovertemplate: '%{{y}}<extra>%{{fullData.name}}</extra>',
+      }}));
+      const fmt = UNIT_FMT[p.unit];
+      Plotly.newPlot(plotDiv, traces, {{
+        margin: {{ l: 50, r: 16, t: 4, b: 30 }},
+        paper_bgcolor: 'transparent',
+        plot_bgcolor: 'transparent',
+        font: {{ color: '#8e8e8e', size: 10 }},
+        xaxis: {{ gridcolor: '#2a2a2e', linecolor: '#2a2a2e', tickformat: '%H:%M' }},
+        yaxis: {{ gridcolor: '#2a2a2e', linecolor: '#2a2a2e',
+                  tickformat: fmt ? undefined : '.3s',
+                  hoverformat: '.4g' }},
+        legend: {{ font: {{ size: 9 }}, orientation: 'h', y: -0.3 }},
+        showlegend: traces.length > 1,
+        hovermode: 'x unified',
+      }}, {{ responsive: true, displayModeBar: false }});
+    }}
+  }});
+}}, {{ rootMargin: '200px' }});
+
 function renderPanel(container, p) {{
   const div = document.createElement('div');
   div.className = 'panel';
@@ -339,31 +374,8 @@ function renderPanel(container, p) {{
   plotDiv.className = 'plot';
   div.appendChild(plotDiv);
   container.appendChild(div);
-
-  const traces = allSeries.filter(x => x.s.values.length > 0).map((x, i) => ({{
-    x: x.s.values.map(v => new Date(v[0] * 1000)),
-    y: x.s.values.map(v => parseFloat(v[1])),
-    name: seriesLabel(x.q, x.s),
-    type: 'scatter',
-    mode: 'lines',
-    line: {{ width: 1.5, color: COLORS[i % COLORS.length] }},
-    hovertemplate: '%{{y}}<extra>%{{fullData.name}}</extra>',
-  }}));
-
-  const fmt = UNIT_FMT[p.unit];
-  Plotly.newPlot(plotDiv, traces, {{
-    margin: {{ l: 50, r: 16, t: 4, b: 30 }},
-    paper_bgcolor: 'transparent',
-    plot_bgcolor: 'transparent',
-    font: {{ color: '#8e8e8e', size: 10 }},
-    xaxis: {{ gridcolor: '#2a2a2e', linecolor: '#2a2a2e', tickformat: '%H:%M' }},
-    yaxis: {{ gridcolor: '#2a2a2e', linecolor: '#2a2a2e',
-              tickformat: fmt ? undefined : '.3s',
-              hoverformat: '.4g' }},
-    legend: {{ font: {{ size: 9 }}, orientation: 'h', y: -0.3 }},
-    showlegend: traces.length > 1,
-    hovermode: 'x unified',
-  }}, {{ responsive: true, displayModeBar: false }});
+  div._panelData = p;
+  lazyObserver.observe(div);
 }}
 </script>
 </body>
