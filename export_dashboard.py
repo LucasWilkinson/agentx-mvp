@@ -291,36 +291,6 @@ function seriesLabel(q, s) {{
 const root = document.getElementById('root');
 let currentGrid = null;
 
-if (rows.length === 0) {{
-  currentGrid = document.createElement('div');
-  currentGrid.className = 'grid';
-  root.appendChild(currentGrid);
-  for (const p of Object.values(panels)) renderPanel(currentGrid, p);
-}} else {{
-  for (const item of rows) {{
-    if (item.type === 'row') {{
-      const h = document.createElement('div');
-      h.className = 'row-header';
-      h.innerHTML = '<span class="arrow">▾</span> ' + item.title;
-      currentGrid = document.createElement('div');
-      currentGrid.className = 'grid';
-      h.addEventListener('click', () => {{
-        h.classList.toggle('collapsed');
-        currentGrid.classList.toggle('hidden');
-      }});
-      root.appendChild(h);
-      root.appendChild(currentGrid);
-    }} else if (item.type === 'panel' && panels[item.id]) {{
-      if (!currentGrid) {{
-        currentGrid = document.createElement('div');
-        currentGrid.className = 'grid';
-        root.appendChild(currentGrid);
-      }}
-      renderPanel(currentGrid, panels[item.id]);
-    }}
-  }}
-}}
-
 const lazyObserver = new IntersectionObserver((entries) => {{
   entries.forEach(entry => {{
     if (entry.isIntersecting) {{
@@ -376,6 +346,36 @@ function renderPanel(container, p) {{
   container.appendChild(div);
   div._panelData = p;
   lazyObserver.observe(div);
+}}
+
+if (rows.length === 0) {{
+  currentGrid = document.createElement('div');
+  currentGrid.className = 'grid';
+  root.appendChild(currentGrid);
+  for (const p of Object.values(panels)) renderPanel(currentGrid, p);
+}} else {{
+  for (const item of rows) {{
+    if (item.type === 'row') {{
+      const h = document.createElement('div');
+      h.className = 'row-header';
+      h.innerHTML = '<span class="arrow">▾</span> ' + item.title;
+      currentGrid = document.createElement('div');
+      currentGrid.className = 'grid';
+      h.addEventListener('click', () => {{
+        h.classList.toggle('collapsed');
+        currentGrid.classList.toggle('hidden');
+      }});
+      root.appendChild(h);
+      root.appendChild(currentGrid);
+    }} else if (item.type === 'panel' && panels[item.id]) {{
+      if (!currentGrid) {{
+        currentGrid = document.createElement('div');
+        currentGrid.className = 'grid';
+        root.appendChild(currentGrid);
+      }}
+      renderPanel(currentGrid, panels[item.id]);
+    }}
+  }}
 }}
 </script>
 </body>
