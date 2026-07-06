@@ -545,7 +545,7 @@ sweep-isolated outdir configs duration="900":
         dir="{{outdir}}/results_p${P}_d${D}"
         # Skip if all concurrency results already exist
         ALL_DONE=true
-        for C in 1 4 16 64; do
+        for C in 1 16 64 256; do
             if [ ! -f "$dir/results_p${P}_d${D}_c${C}/profile_export_aiperf.json" ]; then
                 ALL_DONE=false
                 break
@@ -619,7 +619,7 @@ sweep-concurrency prefix="sweep" dest="." duration="900":
     #!/usr/bin/env bash
     set -uo pipefail
     FAILED=""
-    for C in 1 4 16 64; do
+    for C in 1 16 64 256; do
         RDIR="{{dest}}/results_{{prefix}}_c${C}"
         if [ -f "$RDIR/profile_export_aiperf.json" ]; then
             echo "=== concurrency=$C — already exists, skipping ==="
@@ -660,7 +660,7 @@ sweep outdir configs duration="900":
         dir="{{outdir}}/results_p${P}_d${D}"
         # Skip if all concurrency results already exist
         ALL_DONE=true
-        for C in 1 4 16 64; do
+        for C in 1 16 64 256; do
             if [ ! -f "$dir/results_p${P}_d${D}_c${C}/profile_export_aiperf.json" ]; then
                 ALL_DONE=false
                 break
