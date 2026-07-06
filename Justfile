@@ -328,6 +328,8 @@ setup-namespace ns:
     fi
     # Service account
     kubectl apply -n {{ns}} -f "$ROOT/guides/wide-ep-lws/modelserver/gpu/vllm-glm-5.2/base/serviceAccount.yaml"
+    # DCGM metrics ConfigMap (for dcgm-exporter sidecar)
+    kubectl apply -n {{ns}} -f "$ROOT/guides/wide-ep-lws/modelserver/gpu/vllm-glm-5.2/base/dcgm-custom-metrics.yaml"
     # Gateway (configmap + gateway via kustomize)
     kubectl kustomize "$ROOT/guides/recipes/gateway/istio/" | kubectl apply -n {{ns}} -f -
     # InferenceModel
@@ -424,6 +426,48 @@ setup-namespace ns:
           - source_labels: [__meta_kubernetes_pod_label_llm_d_router_gateway]
             target_label: inferencepool
         scrape_interval: 1s
+        metrics_path: /metrics
+      - job_name: 'dcgm'
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - {{ns}}
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_container_name]
+            regex: dcgm-exporter
+            action: keep
+          - source_labels: [__meta_kubernetes_pod_container_port_number]
+            regex: '9400'
+            action: keep
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+          - source_labels: [__meta_kubernetes_pod_node_name]
+            target_label: node
+          - source_labels: [__meta_kubernetes_pod_label_llm_d_ai_role]
+            target_label: role
+        scrape_interval: 5s
+        metrics_path: /metrics
+      - job_name: 'node-exporter'
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - {{ns}}
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_container_name]
+            regex: node-exporter
+            action: keep
+          - source_labels: [__meta_kubernetes_pod_container_port_number]
+            regex: '9100'
+            action: keep
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+          - source_labels: [__meta_kubernetes_pod_node_name]
+            target_label: node
+          - source_labels: [__meta_kubernetes_pod_label_llm_d_ai_role]
+            target_label: role
+        scrape_interval: 5s
         metrics_path: /metrics
     PROMEOF
     # Grafana
