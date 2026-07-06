@@ -569,6 +569,31 @@ teardown-serving ns:
     echo "=== Serving removed from {{ns}} ==="
 
 # Fully tear down an isolated benchmark namespace (including monitoring).
+# Snapshot Prometheus TSDB from a benchmark namespace into a local directory.
+# Usage: just snapshot-prometheus ecrncevi-dev-p1d1 results_run1/results_p1_d1
+snapshot-prometheus ns dest:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    PROM_POD=$(kubectl get pod -n "{{ns}}" -l app.kubernetes.io/name=prometheus,app.kubernetes.io/component=server -o jsonpath='{.items[0].metadata.name}' 2>/dev/null) || {
+        echo "  No Prometheus pod in {{ns}}, skipping snapshot"
+        exit 0
+    }
+    echo "=== {{ns}}: snapshotting Prometheus TSDB ==="
+    SNAP_NAME=$(kubectl exec -n "{{ns}}" "$PROM_POD" -c prometheus-server -- \
+        wget -qO- --post-data= http://localhost:9090/api/v1/admin/tsdb/snapshot 2>/dev/null \
+        | python3 -c "import json,sys; print(json.load(sys.stdin)['data']['name'])" 2>/dev/null) || {
+        echo "  WARNING: snapshot failed for {{ns}}, skipping"
+        exit 0
+    }
+    SNAP_DIR="{{dest}}/prometheus_snapshot"
+    mkdir -p "$SNAP_DIR"
+    kubectl cp "{{ns}}/${PROM_POD}:/data/snapshots/${SNAP_NAME}" "$SNAP_DIR" -c prometheus-server 2>/dev/null || {
+        echo "  WARNING: snapshot copy failed for {{ns}}"
+        exit 0
+    }
+    kubectl exec -n "{{ns}}" "$PROM_POD" -c prometheus-server -- rm -rf "/data/snapshots/${SNAP_NAME}" 2>/dev/null || true
+    echo "  Saved to $SNAP_DIR"
+
 # Usage: just teardown-namespace ecrncevi-dev-p2d2
 teardown-namespace ns:
     #!/usr/bin/env bash
@@ -615,6 +640,14 @@ sweep-isolated outdir configs duration="900":
     # Wait for all parallel sweeps to complete
     wait
     echo "====== All sweeps complete ======"
+    # Snapshot Prometheus TSDB before tearing down serving
+    for NS in "${NAMESPACES[@]}"; do
+        # Derive the results dir from the namespace suffix (e.g. ecrncevi-dev-p1d1 -> results_p1_d1)
+        SUFFIX=${NS##*-p}
+        P=${SUFFIX%%d*}
+        D=${SUFFIX##*d}
+        just snapshot-prometheus "$NS" "{{outdir}}/results_p${P}_d${D}" || echo "WARNING: snapshot failed for $NS"
+    done
     # Free GPUs but keep prometheus/grafana for after-the-fact reporting
     for NS in "${NAMESPACES[@]}"; do
         just teardown-serving "$NS"
@@ -838,7 +871,7 @@ seed-sequential outdir configs:
     OUTDIR="{{outdir}}"
     CONFIGS="{{configs}}"
     TMPSCRIPT=$(mktemp)
-    printf '#!/bin/bash\ncd /workspace/agentx-mvp\nfor cfg in %s; do\n  IFS=: read -r P D <<< "$cfg"\n  NS=ecrncevi-dev-p${P}d${D}\n  echo "====== Sequential: P${P}:D${D} in $NS ======"\n  if ! just setup-namespace "$NS"; then\n    echo "FAILED: setup for P${P}:D${D}, skipping"\n    just teardown-namespace "$NS" 2>/dev/null || true\n    continue\n  fi\n  NAMESPACE="$NS" just sweep "%s" "${P}:${D}" || echo "FAILED: sweep for P${P}:D${D}"\n  just teardown-namespace "$NS"\ndone\n' "$CONFIGS" "$OUTDIR" > "$TMPSCRIPT"
+    printf '#!/bin/bash\ncd /workspace/agentx-mvp\nfor cfg in %s; do\n  IFS=: read -r P D <<< "$cfg"\n  NS=ecrncevi-dev-p${P}d${D}\n  echo "====== Sequential: P${P}:D${D} in $NS ======"\n  if ! just setup-namespace "$NS"; then\n    echo "FAILED: setup for P${P}:D${D}, skipping"\n    just teardown-namespace "$NS" 2>/dev/null || true\n    continue\n  fi\n  NAMESPACE="$NS" just sweep "%s" "${P}:${D}" || echo "FAILED: sweep for P${P}:D${D}"\n  just snapshot-prometheus "$NS" "%s/results_p${P}_d${D}" || echo "WARNING: snapshot failed for P${P}:D${D}"\n  just teardown-namespace "$NS"\ndone\n' "$CONFIGS" "$OUTDIR" "$OUTDIR" > "$TMPSCRIPT"
     kubectl cp "$TMPSCRIPT" "$NS/${POD}:/workspace/run_seed.sh"
     rm -f "$TMPSCRIPT"
     kubectl exec -n "$NS" "$POD" -- chmod +x /workspace/run_seed.sh
