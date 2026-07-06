@@ -5513,9 +5513,9 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "rate(DCGM_FI_PROF_NVLINK_TX_BYTES{pod=~\"${deployment}-.*\"}[1m])",
+          "expr": "rate(DCGM_FI_PROF_NVLINK_TX_BYTES{job=\"dcgm\"}[1m]) * on(node) group_left(role) (max by(node, role) (label_replace(up{job=~\"vllm-.*\"}, \"role\", \"$1\", \"job\", \"vllm-(.*)\")))",
           "instant": false,
-          "legendFormat": "TX {{node}}",
+          "legendFormat": "{{role}} {{node}} gpu:{{gpu}}",
           "range": true,
           "refId": "A"
         },
@@ -5525,9 +5525,9 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "rate(DCGM_FI_PROF_NVLINK_RX_BYTES{pod=~\"${deployment}-.*\"}[1m])",
+          "expr": "rate(DCGM_FI_PROF_NVLINK_RX_BYTES{job=\"dcgm\"}[1m]) * on(node) group_left(role) (max by(node, role) (label_replace(up{job=~\"vllm-.*\"}, \"role\", \"$1\", \"job\", \"vllm-(.*)\")))",
           "instant": false,
-          "legendFormat": "RX {{node}}",
+          "legendFormat": "{{role}} {{node}} gpu:{{gpu}}",
           "range": true,
           "refId": "B"
         }
@@ -5741,9 +5741,9 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "DCGM_FI_DEV_GPU_UTIL{pod=~\"${deployment}-.*\"}",
+          "expr": "DCGM_FI_DEV_GPU_UTIL{job=\"dcgm\"} * on(node) group_left(role) (max by(node, role) (label_replace(up{job=~\"vllm-.*\"}, \"role\", \"$1\", \"job\", \"vllm-(.*)\")))",
           "instant": false,
-          "legendFormat": "{{node}} gpu:{{gpu}}",
+          "legendFormat": "{{role}} {{node}} gpu:{{gpu}}",
           "range": true,
           "refId": "A"
         }
@@ -5843,9 +5843,9 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "DCGM_FI_DEV_POWER_USAGE{pod=~\"${deployment}-.*\"}",
+          "expr": "DCGM_FI_DEV_POWER_USAGE{job=\"dcgm\"} * on(node) group_left(role) (max by(node, role) (label_replace(up{job=~\"vllm-.*\"}, \"role\", \"$1\", \"job\", \"vllm-(.*)\")))",
           "instant": false,
-          "legendFormat": "{{node}} gpu:{{gpu}}",
+          "legendFormat": "{{role}} {{node}} gpu:{{gpu}}",
           "range": true,
           "refId": "A"
         }

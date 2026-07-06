@@ -346,6 +346,30 @@ setup-namespace ns:
       name: grafana
       namespace: {{ns}}
     RBACEOF
+    # ClusterRole+Binding for Prometheus to scrape dcgm-exporter in cw-exporters namespace
+    kubectl apply -f - <<DCGMRBAC
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRole
+    metadata:
+      name: {{ns}}-prometheus-cw-exporters-reader
+    rules:
+    - apiGroups: [""]
+      resources: [pods]
+      verbs: [get, list, watch]
+    ---
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRoleBinding
+    metadata:
+      name: {{ns}}-prometheus-cw-exporters-reader
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: ClusterRole
+      name: {{ns}}-prometheus-cw-exporters-reader
+    subjects:
+    - kind: ServiceAccount
+      name: prometheus-server
+      namespace: {{ns}}
+    DCGMRBAC
     # Copy HF token secret from source namespace, or create a dummy if source is gone
     if kubectl get secret llm-d-hf-token -n {{NAMESPACE}} -o json 2>/dev/null \
       | python3 -c "import json,sys; d=json.load(sys.stdin); d['metadata']={'name':'llm-d-hf-token','namespace':'{{ns}}'}; print(json.dumps(d))" \
@@ -461,20 +485,16 @@ setup-namespace ns:
           - role: pod
             namespaces:
               names:
-                - {{ns}}
+                - cw-exporters
         relabel_configs:
-          - source_labels: [__meta_kubernetes_pod_container_name]
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
             regex: dcgm-exporter
             action: keep
-          - source_labels: [__meta_kubernetes_pod_container_port_number]
-            regex: '9400'
-            action: keep
-          - source_labels: [__meta_kubernetes_pod_name]
-            target_label: pod
           - source_labels: [__meta_kubernetes_pod_node_name]
             target_label: node
-          - source_labels: [__meta_kubernetes_pod_label_llm_d_ai_role]
-            target_label: role
+        metric_relabel_configs:
+          - source_labels: [Hostname]
+            target_label: node
         scrape_interval: 5s
         metrics_path: /metrics
       - job_name: 'node-exporter'
@@ -558,6 +578,8 @@ teardown-namespace ns:
     helm uninstall wide-ep-lws -n {{ns}} 2>/dev/null || true
     helm uninstall prometheus -n {{ns}} 2>/dev/null || true
     helm uninstall grafana -n {{ns}} 2>/dev/null || true
+    kubectl delete clusterrole {{ns}}-prometheus-cw-exporters-reader --ignore-not-found 2>/dev/null || true
+    kubectl delete clusterrolebinding {{ns}}-prometheus-cw-exporters-reader --ignore-not-found 2>/dev/null || true
     kubectl delete namespace {{ns}} --ignore-not-found
     echo "=== Namespace {{ns}} deleted ==="
 
@@ -854,6 +876,31 @@ seed-results outdir:
         LOCAL=${f#/workspace/agentx-mvp/}
         mkdir -p "$(dirname "$LOCAL")"
         kubectl cp "$NS/${POD}:${f}" "$LOCAL" 2>/dev/null || true
+    done
+    # Snapshot and download Prometheus TSDB from each benchmark namespace
+    SNAPPED=""
+    for dir in $DIRS; do
+        PARENT=$(dirname "$dir")
+        NS_FILE=$(kubectl exec -n "$NS" "$POD" -- cat "${PARENT}/namespace.txt" 2>/dev/null) || continue
+        if echo "$SNAPPED" | grep -q "|${NS_FILE}|"; then continue; fi
+        SNAPPED="${SNAPPED}|${NS_FILE}|"
+        PROM_POD=$(kubectl get pod -n "$NS_FILE" -l app.kubernetes.io/name=prometheus,app.kubernetes.io/component=server -o jsonpath='{.items[0].metadata.name}' 2>/dev/null) || continue
+        echo "=== $NS_FILE: snapshotting Prometheus TSDB ==="
+        SNAP_NAME=$(kubectl exec -n "$NS_FILE" "$PROM_POD" -c prometheus-server -- \
+            wget -qO- --post-data= http://localhost:9090/api/v1/admin/tsdb/snapshot 2>/dev/null \
+            | python3 -c "import json,sys; print(json.load(sys.stdin)['data']['name'])" 2>/dev/null) || {
+            echo "  WARNING: snapshot failed for $NS_FILE, skipping"
+            continue
+        }
+        LOCAL_PARENT=${PARENT#/workspace/agentx-mvp/}
+        SNAP_DIR="${LOCAL_PARENT}/prometheus_snapshot"
+        mkdir -p "$SNAP_DIR"
+        kubectl cp "$NS_FILE/${PROM_POD}:/data/snapshots/${SNAP_NAME}" "$SNAP_DIR" -c prometheus-server 2>/dev/null || {
+            echo "  WARNING: snapshot copy failed for $NS_FILE"
+            continue
+        }
+        kubectl exec -n "$NS_FILE" "$PROM_POD" -c prometheus-server -- rm -rf "/data/snapshots/${SNAP_NAME}" 2>/dev/null || true
+        echo "  Saved to $SNAP_DIR"
     done
     echo "Results copied to {{outdir}}/"
     python3 gen_interactivity_chart.py "{{outdir}}" 2>/dev/null || true
