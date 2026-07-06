@@ -715,7 +715,6 @@ seed outdir configs:
     #!/usr/bin/env bash
     set -euo pipefail
     NS={{NAMESPACE}}
-    ROOT={{llm_d_root}}
     DEPLOY=deploy/{{seed_deploy}}
     # Ensure helm repos are configured (survives pod restarts)
     kubectl exec -n "$NS" "$DEPLOY" -- helm repo add prometheus-community https://prometheus-community.github.io/helm-charts 2>/dev/null
@@ -723,14 +722,7 @@ seed outdir configs:
     kubectl exec -n "$NS" "$DEPLOY" -- helm repo update
     POD=$(kubectl get pod -n "$NS" -l app={{seed_deploy}} -o jsonpath='{.items[0].metadata.name}')
     echo "=== Syncing files to seed pod ==="
-    # Create directory structure
-    kubectl exec -n "$NS" "$POD" -- mkdir -p \
-        /workspace/agentx-mvp \
-        /workspace/llm-d/guides/wide-ep-lws/modelserver/gpu/vllm-glm-5.2/base \
-        /workspace/llm-d/guides/recipes/gateway/base \
-        /workspace/llm-d/guides/recipes/gateway/istio \
-        /workspace/llm-d/guides/recipes/router/features \
-        /workspace/llm-d/guides/wide-ep-lws/router
+    kubectl exec -n "$NS" "$POD" -- mkdir -p /workspace/agentx-mvp
     # Copy agentx-mvp files (NOT .env — written fresh below)
     for f in Justfile agentx.yaml dashboard.json extract_timestamps.py export_dashboard.py gen_interactivity_chart.py overlay_dashboards.py; do
         [ -f "$f" ] && kubectl cp "$f" "$NS/${POD}:/workspace/agentx-mvp/$f"
@@ -739,26 +731,9 @@ seed outdir configs:
     for f in dashboards/*.json; do
         kubectl cp "$f" "$NS/${POD}:/workspace/agentx-mvp/$f"
     done
-    # Copy llm-d files
-    LLM_D_FILES=(
-        guides/env.sh
-        guides/wide-ep-lws/modelserver/gpu/vllm-glm-5.2/base/prefill.yaml
-        guides/wide-ep-lws/modelserver/gpu/vllm-glm-5.2/base/decode.yaml
-        guides/wide-ep-lws/modelserver/gpu/vllm-glm-5.2/base/serviceAccount.yaml
-        guides/recipes/gateway/base/kustomization.yaml
-        guides/recipes/gateway/base/gateway.yaml
-        guides/recipes/gateway/istio/kustomization.yaml
-        guides/recipes/gateway/istio/gateway.yaml
-        guides/recipes/gateway/istio/telemetry.yaml
-        guides/recipes/gateway/istio/configmap.yaml
-        guides/recipes/router/base.values.yaml
-        guides/recipes/router/features/httproute-flags.yaml
-        guides/wide-ep-lws/router/wide-ep-lws.values.yaml
-        guides/wide-ep-lws/router/glm-5.2-overrides.values.yaml
-    )
-    for f in "${LLM_D_FILES[@]}"; do
-        kubectl cp "$ROOT/$f" "$NS/${POD}:/workspace/llm-d/$f"
-    done
+    # Clone llm-d repo (or pull if already cloned)
+    kubectl exec -n "$NS" "$POD" -- bash -c \
+        'if [ -d /workspace/llm-d/.git ]; then cd /workspace/llm-d && git pull; else git clone --branch wip-glm https://github.com/elvircrn/llm-d.git /workspace/llm-d; fi'
     # Write clean .env (no KUBECONFIG — uses ServiceAccount auth)
     TMPENV=$(mktemp)
     trap "rm -f $TMPENV" EXIT
@@ -786,7 +761,6 @@ seed-sequential outdir configs:
     #!/usr/bin/env bash
     set -euo pipefail
     NS={{NAMESPACE}}
-    ROOT={{llm_d_root}}
     DEPLOY=deploy/{{seed_deploy}}
     # Ensure helm repos are configured (survives pod restarts)
     kubectl exec -n "$NS" "$DEPLOY" -- helm repo add prometheus-community https://prometheus-community.github.io/helm-charts 2>/dev/null
@@ -794,13 +768,7 @@ seed-sequential outdir configs:
     kubectl exec -n "$NS" "$DEPLOY" -- helm repo update
     POD=$(kubectl get pod -n "$NS" -l app={{seed_deploy}} -o jsonpath='{.items[0].metadata.name}')
     echo "=== Syncing files to seed pod ==="
-    kubectl exec -n "$NS" "$POD" -- mkdir -p \
-        /workspace/agentx-mvp \
-        /workspace/llm-d/guides/wide-ep-lws/modelserver/gpu/vllm-glm-5.2/base \
-        /workspace/llm-d/guides/recipes/gateway/base \
-        /workspace/llm-d/guides/recipes/gateway/istio \
-        /workspace/llm-d/guides/recipes/router/features \
-        /workspace/llm-d/guides/wide-ep-lws/router
+    kubectl exec -n "$NS" "$POD" -- mkdir -p /workspace/agentx-mvp
     for f in Justfile agentx.yaml dashboard.json extract_timestamps.py export_dashboard.py gen_interactivity_chart.py overlay_dashboards.py; do
         [ -f "$f" ] && kubectl cp "$f" "$NS/${POD}:/workspace/agentx-mvp/$f"
     done
@@ -808,25 +776,9 @@ seed-sequential outdir configs:
     for f in dashboards/*.json; do
         kubectl cp "$f" "$NS/${POD}:/workspace/agentx-mvp/$f"
     done
-    LLM_D_FILES=(
-        guides/env.sh
-        guides/wide-ep-lws/modelserver/gpu/vllm-glm-5.2/base/prefill.yaml
-        guides/wide-ep-lws/modelserver/gpu/vllm-glm-5.2/base/decode.yaml
-        guides/wide-ep-lws/modelserver/gpu/vllm-glm-5.2/base/serviceAccount.yaml
-        guides/recipes/gateway/base/kustomization.yaml
-        guides/recipes/gateway/base/gateway.yaml
-        guides/recipes/gateway/istio/kustomization.yaml
-        guides/recipes/gateway/istio/gateway.yaml
-        guides/recipes/gateway/istio/telemetry.yaml
-        guides/recipes/gateway/istio/configmap.yaml
-        guides/recipes/router/base.values.yaml
-        guides/recipes/router/features/httproute-flags.yaml
-        guides/wide-ep-lws/router/wide-ep-lws.values.yaml
-        guides/wide-ep-lws/router/glm-5.2-overrides.values.yaml
-    )
-    for f in "${LLM_D_FILES[@]}"; do
-        kubectl cp "$ROOT/$f" "$NS/${POD}:/workspace/llm-d/$f"
-    done
+    # Clone llm-d repo (or pull if already cloned)
+    kubectl exec -n "$NS" "$POD" -- bash -c \
+        'if [ -d /workspace/llm-d/.git ]; then cd /workspace/llm-d && git pull; else git clone --branch wip-glm https://github.com/elvircrn/llm-d.git /workspace/llm-d; fi'
     TMPENV=$(mktemp)
     trap "rm -f $TMPENV" EXIT
     printf 'NAMESPACE=%s\nGLM_PD_PREFILL=/workspace/llm-d/guides/wide-ep-lws/modelserver/gpu/vllm-glm-5.2/base/prefill.yaml\nGLM_PD_DECODE=/workspace/llm-d/guides/wide-ep-lws/modelserver/gpu/vllm-glm-5.2/base/decode.yaml\nLLM_D_ROOT=/workspace/llm-d\n' "{{NAMESPACE}}" > "$TMPENV"

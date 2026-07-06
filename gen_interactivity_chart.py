@@ -18,6 +18,7 @@ import sys
 from pathlib import Path
 
 GPUS_PER_NODE = 8
+STAT_KEYS = ['avg', 'min', 'p50', 'p90', 'p95', 'p99', 'max']
 
 COLORS = [
     '#f97316', '#22d3ee', '#a78bfa', '#34d399', '#f472b6',
@@ -37,6 +38,7 @@ def discover_configs(results_dir):
                 ...
     """
     configs = {}
+    metric_units = {}
     config_pattern = re.compile(r'^results_(p(\d+)_d(\d+))$')
 
     for entry in sorted(os.listdir(results_dir)):
@@ -65,18 +67,13 @@ def discover_configs(results_dir):
             with open(json_path) as f:
                 d = json.load(f)
 
-            runs[c_val] = {
-                'out_tps': d['output_token_throughput']['avg'],
-                'itl_avg': d['inter_token_latency']['avg'],
-                'itl_p50': d['inter_token_latency']['p50'],
-                'itl_p99': d['inter_token_latency']['p99'],
-                'otpu': d['output_token_throughput_per_user']['avg'],
-                'ttft_avg': d['time_to_first_token']['avg'],
-                'ttft_p50': d['time_to_first_token']['p50'],
-                'ttft_p99': d['time_to_first_token']['p99'],
-                'ttft_min': d['time_to_first_token']['min'],
-                'ttft_max': d['time_to_first_token']['max'],
-            }
+            run_data = {}
+            for key, val in d.items():
+                if isinstance(val, dict) and 'avg' in val:
+                    run_data[key] = {s: val[s] for s in STAT_KEYS if s in val}
+                    if key not in metric_units:
+                        metric_units[key] = val.get('unit', '')
+            runs[c_val] = run_data
 
         if not runs:
             continue
@@ -95,16 +92,18 @@ def discover_configs(results_dir):
                     with open(ypath) as yf:
                         yamls[yname] = yf.read()
 
+        prefill_gpus = n_prefill * GPUS_PER_NODE
         configs[config_name] = {
             'label': f'{n_prefill}P {n_decode}D',
             'decode_gpus': decode_gpus,
+            'prefill_gpus': prefill_gpus,
             'pods': f'{n_prefill} prefill + {n_decode} decode',
             'runs': dict(sorted(runs.items())),
             'version': version,
             'yamls': yamls,
         }
 
-    return configs
+    return configs, metric_units
 
 
 def highlight_yaml(text):
@@ -142,7 +141,7 @@ def highlight_yaml(text):
     return '\n'.join(out)
 
 
-def generate_html(configs, output_path, results_dir):
+def generate_html(configs, output_path, results_dir, metric_units):
     color_map = {}
     for i, cfg in enumerate(sorted(configs.keys())):
         color_map[cfg] = COLORS[i % len(COLORS)]
@@ -154,6 +153,7 @@ def generate_html(configs, output_path, results_dir):
         configs_js[cfg] = {
             'label': meta['label'],
             'decodeGPUs': meta['decode_gpus'],
+            'prefillGPUs': meta['prefill_gpus'],
             'pods': meta['pods'],
         }
         data_js[cfg] = {}
@@ -165,6 +165,8 @@ def generate_html(configs, output_path, results_dir):
     sorted_conc = sorted(concurrencies)
     conc_list_js = [f'c{c}' for c in sorted_conc]
     c_labels_js = {f'c{c}': c for c in sorted_conc}
+
+    metrics_js = {k: {'unit': v} for k, v in sorted(metric_units.items())}
 
     versions = set(meta['version'] for meta in configs.values() if meta['version'])
     version_str = ', '.join(sorted(versions)) if versions else 'unknown'
@@ -226,9 +228,19 @@ def generate_html(configs, output_path, results_dir):
   .panel-title {{ font-size: 13px; font-weight: 500; padding: 8px 12px; color: #d8d9da; }}
   .panel .plot {{ width: 100%; height: calc(100% - 36px); min-height: 250px; }}
   .panel .plot .nsewdrag {{ cursor: pointer !important; }}
-  .summary {{ background: #181b1f; border: 1px solid #2a2a2e; border-radius: 4px; padding: 16px; margin-bottom: 16px; }}
-  .summary table {{ width: 100%; border-collapse: collapse; font-size: 12px; }}
-  .summary th {{ text-align: left; padding: 6px 8px; color: #8e8e8e; border-bottom: 1px solid #2a2a2e; font-weight: 500; }}
+  .summary {{ background: #181b1f; border: 1px solid #2a2a2e; border-radius: 4px; padding: 16px; margin-bottom: 16px; overflow-x: auto; }}
+  .summary table {{ width: 100%; border-collapse: collapse; font-size: 12px; min-width: 900px; }}
+  .summary th {{ text-align: left; padding: 6px 8px; color: #8e8e8e; border-bottom: 1px solid #2a2a2e; font-weight: 500;
+                 cursor: pointer; user-select: none; white-space: nowrap; }}
+  .summary th:hover {{ color: #d8d9da; }}
+  .chart-row {{ display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 8px; }}
+  @media (max-width: 1200px) {{ .chart-row {{ grid-template-columns: 1fr; }} }}
+  .chart-col {{ display: flex; flex-direction: column; gap: 4px; }}
+  .chart-col .panel {{ min-width: 0; }}
+  .axis-controls {{ display: flex; gap: 10px; align-items: center; padding: 6px 4px; flex-wrap: wrap; }}
+  .axis-controls label {{ color: #8e8e8e; font-size: 12px; display: flex; align-items: center; gap: 4px; }}
+  .axis-controls select {{ background: #181b1f; color: #d8d9da; border: 1px solid #2a2a2e; border-radius: 4px;
+                           padding: 4px 6px; font-size: 11px; font-family: inherit; max-width: 300px; }}
   .summary td {{ padding: 6px 8px; border-bottom: 1px solid #1e1e22; }}
   .summary tr:hover {{ background: #1e2127; }}
   .highlight {{ color: #58a6ff; font-weight: 500; }}
@@ -299,6 +311,8 @@ const CONCURRENCIES = {json.dumps(conc_list_js)};
 const C_LABELS = {json.dumps(c_labels_js)};
 const DATA = {json.dumps(data_js)};
 const DASHBOARDS = {json.dumps(embedded_dashboards)};
+const METRICS = {json.dumps(metrics_js)};
+const STAT_KEYS = {json.dumps(STAT_KEYS)};
 const CONFIG_KEYS = Object.keys(CONFIGS);
 
 const root = document.getElementById('root');
@@ -413,34 +427,147 @@ function makePanel(parent, title, cls) {{
   return plot;
 }}
 
-function hoverText(config, c, d, normalized) {{
-  const norm = (d.out_tps / CONFIGS[config].decodeGPUs).toFixed(1);
-  return `<b>${{CONFIGS[config].label}} @ c${{C_LABELS[c]}}</b><br>` +
-    `Output: ${{d.out_tps.toFixed(1)}} tok/s` + (normalized ? ` (${{norm}} tok/s/GPU)` : '') + `<br>` +
-    `ITL p50: ${{d.itl_p50.toFixed(1)}} ms<br>` +
-    `ITL p99: ${{d.itl_p99.toFixed(1)}} ms<br>` +
-    `Per-user: ${{d.otpu.toFixed(1)}} tok/s/user<br>` +
-    `TTFT avg: ${{(d.ttft_avg/1000).toFixed(1)}}s · p50: ${{(d.ttft_p50/1000).toFixed(1)}}s · p99: ${{(d.ttft_p99/1000).toFixed(1)}}s`;
+// ── Chart factory ──
+function metricLabel(key) {{
+  return key.replace(/_/g, ' ');
 }}
 
-function buildTraces(configs, concurrencies, data, xFn, yFn, normalized) {{
-  return Object.entries(configs).map(([cfg, meta]) => {{
-    const validConcs = concurrencies.filter(c => data[cfg] && data[cfg][c]);
-    const points = validConcs.map(c => data[cfg][c]);
+function hoverText(cfg, c, d) {{
+  const meta = CONFIGS[cfg];
+  const out = d.output_token_throughput;
+  const itl = d.inter_token_latency;
+  const otpu = d.output_token_throughput_per_user;
+  const ttft = d.time_to_first_token;
+  const norm = out ? (out.avg / meta.decodeGPUs).toFixed(1) : '?';
+  return `<b>${{meta.label}} @ c${{C_LABELS[c]}}</b><br>` +
+    `Output: ${{out?.avg?.toFixed(1) ?? '?'}} tok/s (${{norm}} tok/s/GPU)<br>` +
+    `ITL p50: ${{itl?.p50?.toFixed(1) ?? '?'}} ms · p99: ${{itl?.p99?.toFixed(1) ?? '?'}} ms<br>` +
+    `Per-user: ${{otpu?.avg?.toFixed(1) ?? '?'}} tok/s/user<br>` +
+    `TTFT avg: ${{ttft ? (ttft.avg/1000).toFixed(1) : '?'}}s · p50: ${{ttft ? (ttft.p50/1000).toFixed(1) : '?'}}s · p99: ${{ttft ? (ttft.p99/1000).toFixed(1) : '?'}}s`;
+}}
+
+const Y_MODES = {{
+  decode: {{ label: 'tok/s per decode GPU', title: 'Output Token Throughput / Decode GPU (tok/s/GPU)',
+             fn: (d, meta) => {{ const o = d.output_token_throughput; return o ? o.avg / meta.decodeGPUs : null; }} }},
+  total:  {{ label: 'tok/s per total GPU', title: 'Output Token Throughput / Total GPU (tok/s/GPU)',
+             fn: (d, meta) => {{ const o = d.output_token_throughput; return o ? o.avg / (meta.decodeGPUs + meta.prefillGPUs) : null; }} }},
+  raw:    {{ label: 'tok/s (raw)', title: 'Output Token Throughput (tok/s)',
+             fn: (d) => {{ const o = d.output_token_throughput; return o ? o.avg : null; }} }},
+}};
+
+const allCharts = [];
+
+function createChart(container, defaults) {{
+  const state = {{
+    xMetric: defaults.xMetric || 'output_token_throughput_per_user',
+    xStat: defaults.xStat || 'avg',
+    yMode: defaults.yMode || 'decode',
+    el: null,
+  }};
+
+  // Controls
+  const ctrl = document.createElement('div');
+  ctrl.className = 'axis-controls';
+
+  function mkSelect(label, options, value, onChange) {{
+    const lbl = document.createElement('label');
+    lbl.textContent = label;
+    const sel = document.createElement('select');
+    options.forEach(o => {{
+      const opt = document.createElement('option');
+      opt.value = o.value;
+      opt.textContent = o.text;
+      sel.appendChild(opt);
+    }});
+    sel.value = value;
+    sel.addEventListener('change', () => onChange(sel.value));
+    lbl.appendChild(sel);
+    ctrl.appendChild(lbl);
+    return sel;
+  }}
+
+  const metricOpts = Object.keys(METRICS).sort().map(k => ({{
+    value: k, text: metricLabel(k) + (METRICS[k].unit ? ` (${{METRICS[k].unit}})` : '')
+  }}));
+  mkSelect('X:', metricOpts, state.xMetric, v => {{ state.xMetric = v; update(); }});
+  mkSelect('Stat:', STAT_KEYS.map(s => ({{ value: s, text: s }})), state.xStat, v => {{ state.xStat = v; update(); }});
+  mkSelect('Y:', Object.entries(Y_MODES).map(([k, m]) => ({{ value: k, text: m.label }})), state.yMode, v => {{ state.yMode = v; update(); }});
+
+  container.appendChild(ctrl);
+
+  // Panel
+  const panel = document.createElement('div');
+  panel.className = 'panel';
+  panel.style.height = '500px';
+  const plot = document.createElement('div');
+  plot.className = 'plot';
+  panel.appendChild(plot);
+  container.appendChild(panel);
+  new ResizeObserver(() => Plotly.Plots.resize(plot)).observe(panel);
+  state.el = plot;
+
+  function buildTraces() {{
+    const ym = Y_MODES[state.yMode];
+    return CONFIG_KEYS.map(cfg => {{
+      const meta = CONFIGS[cfg];
+      const validConcs = CONCURRENCIES.filter(c => DATA[cfg] && DATA[cfg][c]);
+      return {{
+        x: validConcs.map(c => {{ const m = DATA[cfg][c][state.xMetric]; return m ? m[state.xStat] : null; }}),
+        y: validConcs.map(c => ym.fn(DATA[cfg][c], meta)),
+        text: validConcs.map(c => hoverText(cfg, c, DATA[cfg][c])),
+        hoverinfo: 'text',
+        mode: 'lines+markers+text',
+        textposition: 'top center',
+        textfont: {{ size: 10, color: COLORS[cfg] }},
+        texttemplate: validConcs.map(c => `c${{C_LABELS[c]}}`),
+        name: `${{meta.label}} (${{meta.decodeGPUs}} decode GPUs)`,
+        line: {{ color: COLORS[cfg], width: 2.5 }},
+        marker: {{ size: 10, color: COLORS[cfg] }},
+      }};
+    }});
+  }}
+
+  function getLayout() {{
+    const unit = METRICS[state.xMetric]?.unit || '';
+    const name = metricLabel(state.xMetric);
+    const ss = state.xStat === 'avg' ? '' : ` (${{state.xStat}})`;
+    const ym = Y_MODES[state.yMode];
     return {{
-      x: points.map(xFn(meta)),
-      y: points.map(yFn(meta)),
-      text: validConcs.map((c, i) => hoverText(cfg, c, points[i], normalized)),
-      hoverinfo: 'text',
-      mode: 'lines+markers+text',
-      textposition: 'top center',
-      textfont: {{ size: 10, color: COLORS[cfg] }},
-      texttemplate: validConcs.map(c => `c${{C_LABELS[c]}}`),
-      name: `${{meta.label}} (${{meta.decodeGPUs}} decode GPUs)`,
-      line: {{ color: COLORS[cfg], width: 2.5 }},
-      marker: {{ size: 10, color: COLORS[cfg] }},
+      ...LAYOUT_DEFAULTS,
+      title: {{ text: `${{ym.title.split('(')[0].trim()}} vs ${{name}}${{ss}}`, font: {{ size: 13, color: '#d8d9da' }} }},
+      xaxis: {{ ...LAYOUT_DEFAULTS.xaxis, title: {{ text: `${{name}}${{ss}} (${{unit}})`, font: {{ size: 11 }} }} }},
+      yaxis: {{ ...LAYOUT_DEFAULTS.yaxis, title: {{ text: ym.title, font: {{ size: 11 }} }}, rangemode: 'tozero' }},
+      legend: {{ ...LAYOUT_DEFAULTS.legend, x: 0.99, y: 0.99, xanchor: 'right', yanchor: 'top' }},
     }};
+  }}
+
+  function update() {{
+    const traces = buildTraces();
+    if (state.el.data) {{
+      state.el.data.forEach((old, i) => {{
+        if (traces[i] && old.visible === 'legendonly') traces[i].visible = 'legendonly';
+      }});
+    }}
+    Plotly.react(state.el, traces, getLayout(), {{ responsive: true, edits: {{ legendPosition: true }} }});
+  }}
+
+  Plotly.newPlot(state.el, buildTraces(), getLayout(), {{ responsive: true, edits: {{ legendPosition: true }} }});
+  attachClickHandler(state.el);
+
+  // Legend sync → table
+  state.el.on('plotly_restyle', function() {{
+    CONFIG_KEYS.forEach((cfg, i) => {{
+      if (!state.el.data[i]) return;
+      const vis = state.el.data[i].visible;
+      const show = vis !== 'legendonly' && vis !== false;
+      document.querySelectorAll(`tr[data-cfg="${{cfg}}"]`).forEach(r => {{
+        r.style.display = show ? '' : 'none';
+      }});
+    }});
   }});
+
+  allCharts.push(state);
+  return state;
 }}
 
 // ── Hint ──
@@ -449,56 +576,116 @@ hint.style.cssText = 'color:#ffffff; font-size:15px; padding:12px 4px 8px;';
 hint.textContent = 'Click any data point to open its Prometheus dashboard.';
 root.appendChild(hint);
 
-// ── Section 1: Per-User Throughput (X) vs Normalized Output Throughput / Decode GPU (Y) ──
-const sec1 = makeSection('Output Throughput / Decode GPU vs Per-User Throughput', 'sec-norm');
+// ── Charts: two side by side ──
+const chartRow = document.createElement('div');
+chartRow.className = 'chart-row';
+root.appendChild(chartRow);
 
-(function() {{
-  const el = makePanel(sec1, 'Normalized Output Throughput vs Per-User Throughput', 'wide');
-  const traces = buildTraces(CONFIGS, CONCURRENCIES, DATA,
-    _    => p => p.otpu,
-    meta => p => p.out_tps / meta.decodeGPUs,
-    true);
-  Plotly.newPlot(el, traces, {{
-    ...LAYOUT_DEFAULTS,
-    title: {{ text: 'Output Throughput / Decode GPU vs Per-User Throughput', font: {{ size: 14, color: '#d8d9da' }} }},
-    xaxis: {{ ...LAYOUT_DEFAULTS.xaxis, title: {{ text: 'Output Token Throughput Per User (tok/s/user)', font: {{ size: 12 }} }} }},
-    yaxis: {{ ...LAYOUT_DEFAULTS.yaxis, title: {{ text: 'Output Token Throughput / Decode GPU (tok/s/GPU)', font: {{ size: 12 }} }}, rangemode: 'tozero' }},
-    legend: {{ ...LAYOUT_DEFAULTS.legend, x: 0.99, y: 0.99, xanchor: 'right', yanchor: 'top' }},
-  }}, {{ responsive: true, edits: {{ legendPosition: true }} }});
-  attachClickHandler(el);
-}})();
+const chartCol1 = document.createElement('div');
+chartCol1.className = 'chart-col';
+const chartCol2 = document.createElement('div');
+chartCol2.className = 'chart-col';
+chartRow.appendChild(chartCol1);
+chartRow.appendChild(chartCol2);
 
-// ── Section 2: Summary table ──
-const sec2 = makeSection('Data Summary', 'sec-table');
+createChart(chartCol1, {{ xMetric: 'output_token_throughput_per_user', xStat: 'avg', yMode: 'decode' }});
+createChart(chartCol2, {{ xMetric: 'inter_token_latency', xStat: 'p99', yMode: 'decode' }});
+
+// ── Section 2: Sortable summary table ──
+const sec2Hdr = document.createElement('div');
+sec2Hdr.className = 'row-header';
+sec2Hdr.innerHTML = '<span class="arrow">&#9660;</span> Data Summary';
+const sec2Wrap = document.createElement('div');
+sec2Wrap.id = 'sec-table';
+sec2Hdr.addEventListener('click', () => {{ sec2Hdr.classList.toggle('collapsed'); sec2Wrap.classList.toggle('hidden'); }});
+root.appendChild(sec2Hdr);
+root.appendChild(sec2Wrap);
+
 (function() {{
   const div = document.createElement('div');
   div.className = 'summary';
-  let html = '<table><tr><th>Config</th><th>Concurrency</th><th>Decode GPUs</th><th>Output tok/s</th><th>tok/s/GPU</th><th>ITL p50 (ms)</th><th>ITL p99 (ms)</th><th>Per-user tok/s</th><th>TTFT avg (s)</th><th>TTFT p50 (s)</th><th>TTFT p99 (s)</th><th>TTFT min (s)</th><th>TTFT max (s)</th></tr>';
-  for (const [cfg, meta] of Object.entries(CONFIGS)) {{
+  const table = document.createElement('table');
+  const thead = document.createElement('thead');
+  const tbody = document.createElement('tbody');
+  table.appendChild(thead);
+  table.appendChild(tbody);
+
+  const colDefs = [
+    'Config', 'Concurrency', 'Decode GPUs', 'Output tok/s', 'tok/s/GPU',
+    'ITL p50 (ms)', 'ITL p99 (ms)', 'Per-user tok/s',
+    'TTFT avg (s)', 'TTFT p50 (s)', 'TTFT p99 (s)', 'TTFT min (s)', 'TTFT max (s)',
+  ];
+  const headerRow = document.createElement('tr');
+  colDefs.forEach((label, i) => {{
+    const th = document.createElement('th');
+    th.textContent = label;
+    th.dataset.col = i;
+    th.dataset.label = label;
+    th.addEventListener('click', () => sortTableBy(i, th));
+    headerRow.appendChild(th);
+  }});
+  thead.appendChild(headerRow);
+
+  for (const cfg of CONFIG_KEYS) {{
+    const meta = CONFIGS[cfg];
     for (const c of CONCURRENCIES) {{
       if (!DATA[cfg] || !DATA[cfg][c]) continue;
       const d = DATA[cfg][c];
-      const norm = (d.out_tps / meta.decodeGPUs).toFixed(1);
-      html += `<tr>` +
-        `<td style="color:${{COLORS[cfg]}};font-weight:500">${{meta.label}}</td>` +
-        `<td>${{C_LABELS[c]}}</td>` +
-        `<td>${{meta.decodeGPUs}}</td>` +
-        `<td>${{d.out_tps.toFixed(1)}}</td>` +
-        `<td class="highlight">${{norm}}</td>` +
-        `<td>${{d.itl_p50.toFixed(1)}}</td>` +
-        `<td>${{d.itl_p99.toFixed(1)}}</td>` +
-        `<td>${{d.otpu.toFixed(1)}}</td>` +
-        `<td>${{(d.ttft_avg/1000).toFixed(1)}}</td>` +
-        `<td>${{(d.ttft_p50/1000).toFixed(1)}}</td>` +
-        `<td>${{(d.ttft_p99/1000).toFixed(1)}}</td>` +
-        `<td>${{(d.ttft_min/1000).toFixed(1)}}</td>` +
-        `<td>${{(d.ttft_max/1000).toFixed(1)}}</td>` +
-        `</tr>`;
+      const out = d.output_token_throughput;
+      const itl = d.inter_token_latency;
+      const otpu = d.output_token_throughput_per_user;
+      const ttft = d.time_to_first_token;
+      const norm = out ? (out.avg / meta.decodeGPUs).toFixed(1) : '-';
+
+      const tr = document.createElement('tr');
+      tr.dataset.cfg = cfg;
+      tr.dataset.conc = c;
+
+      const vals = [
+        meta.label, C_LABELS[c], meta.decodeGPUs,
+        out?.avg?.toFixed(1) ?? '-', norm,
+        itl?.p50?.toFixed(1) ?? '-', itl?.p99?.toFixed(1) ?? '-',
+        otpu?.avg?.toFixed(1) ?? '-',
+        ttft ? (ttft.avg/1000).toFixed(1) : '-',
+        ttft ? (ttft.p50/1000).toFixed(1) : '-',
+        ttft ? (ttft.p99/1000).toFixed(1) : '-',
+        ttft ? (ttft.min/1000).toFixed(1) : '-',
+        ttft ? (ttft.max/1000).toFixed(1) : '-',
+      ];
+      vals.forEach((v, i) => {{
+        const td = document.createElement('td');
+        td.textContent = v;
+        if (i === 0) {{ td.style.color = COLORS[cfg]; td.style.fontWeight = '500'; }}
+        if (i === 4) td.className = 'highlight';
+        tr.appendChild(td);
+      }});
+      tbody.appendChild(tr);
     }}
   }}
-  html += '</table>';
-  div.innerHTML = html;
-  sec2.appendChild(div);
+
+  let sortCol = -1, sortAsc = true;
+  function sortTableBy(col, th) {{
+    if (sortCol === col) sortAsc = !sortAsc;
+    else {{ sortCol = col; sortAsc = true; }}
+
+    thead.querySelectorAll('th').forEach(h => h.textContent = h.dataset.label);
+    th.textContent = th.dataset.label + (sortAsc ? ' \\u25B2' : ' \\u25BC');
+
+    const cfgOrder = {{}};
+    CONFIG_KEYS.forEach((k, i) => cfgOrder[k] = i);
+    const rows = Array.from(tbody.querySelectorAll('tr'));
+    rows.sort((a, b) => {{
+      const va = parseFloat(a.cells[col]?.textContent) || 0;
+      const vb = parseFloat(b.cells[col]?.textContent) || 0;
+      const diff = sortAsc ? va - vb : vb - va;
+      if (diff !== 0) return diff;
+      return cfgOrder[a.dataset.cfg] - cfgOrder[b.dataset.cfg];
+    }});
+    rows.forEach(r => tbody.appendChild(r));
+  }}
+
+  div.appendChild(table);
+  sec2Wrap.appendChild(div);
 }})();
 </script>
 
@@ -522,7 +709,7 @@ def main():
         print(f"Error: {results_dir} not found", file=sys.stderr)
         sys.exit(1)
 
-    configs = discover_configs(results_dir)
+    configs, metric_units = discover_configs(results_dir)
     if not configs:
         print(f"Error: no results_pN_dM/ directories found in {results_dir}", file=sys.stderr)
         sys.exit(1)
@@ -530,7 +717,7 @@ def main():
     output_dir = os.path.dirname(os.path.abspath(results_dir))
     output_path = os.path.join(output_dir, 'interactivity_vs_throughput.html')
 
-    generate_html(configs, output_path, results_dir)
+    generate_html(configs, output_path, results_dir, metric_units)
 
     print(f"Discovered {len(configs)} configs:")
     for cfg, meta in sorted(configs.items()):
