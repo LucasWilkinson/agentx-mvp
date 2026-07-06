@@ -259,6 +259,34 @@ report outdir:
         kubectl cp "$NS/${POD}:/workspace/dashboard_${NAME}.html" "$dir/dashboard.html" 2>/dev/null || true
         kubectl exec -n "$NS" "$POD" -- rm -f "/workspace/dashboard_${NAME}.html"
     done
+    # Snapshot Prometheus TSDB for each namespace (preserves all metrics)
+    SNAPPED=""
+    for dir in $DIRS; do
+        PARENT=$(dirname "$dir")
+        if [ -f "$PARENT/namespace.txt" ]; then
+            NS=$(cat "$PARENT/namespace.txt")
+        else
+            NS={{NAMESPACE}}
+        fi
+        if echo "$SNAPPED" | grep -q "|${NS}|"; then continue; fi
+        SNAPPED="${SNAPPED}|${NS}|"
+        PROM_POD=$(kubectl get pod -n "$NS" -l app.kubernetes.io/name=prometheus,app.kubernetes.io/component=server -o jsonpath='{.items[0].metadata.name}' 2>/dev/null) || continue
+        echo "=== $NS: snapshotting Prometheus TSDB ==="
+        SNAP_NAME=$(kubectl exec -n "$NS" "$PROM_POD" -c prometheus-server -- \
+            wget -qO- --post-data= http://localhost:9090/api/v1/admin/tsdb/snapshot 2>/dev/null \
+            | python3 -c "import json,sys; print(json.load(sys.stdin)['data']['name'])" 2>/dev/null) || {
+            echo "  WARNING: snapshot failed for $NS, skipping"
+            continue
+        }
+        SNAP_DIR="$PARENT/prometheus_snapshot"
+        mkdir -p "$SNAP_DIR"
+        kubectl cp "$NS/${PROM_POD}:/data/snapshots/${SNAP_NAME}" "$SNAP_DIR" -c prometheus-server 2>/dev/null || {
+            echo "  WARNING: snapshot copy failed for $NS"
+            continue
+        }
+        kubectl exec -n "$NS" "$PROM_POD" -c prometheus-server -- rm -rf "/data/snapshots/${SNAP_NAME}" 2>/dev/null || true
+        echo "  Saved to $SNAP_DIR"
+    done
     python3 gen_interactivity_chart.py "$(dirname "{{outdir}}")" 2>/dev/null || true
 
 # Bootstrap a new namespace with all resources needed for benchmarking.
@@ -353,6 +381,7 @@ setup-namespace ns:
       --set prometheus-pushgateway.enabled=false \
       --set rbac.create=false \
       --set server.persistentVolume.enabled=false \
+      --set 'server.extraFlags[0]=web.enable-admin-api' \
       --set serviceAccounts.server.create=true \
       --set serviceAccounts.server.name=prometheus-server \
       --set 'server.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].key=kubernetes.io/arch' \
