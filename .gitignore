@@ -2,3 +2,4 @@ result*
 .env
 __pycache__
 *.html
+.idea

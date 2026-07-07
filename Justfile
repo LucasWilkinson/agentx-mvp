@@ -155,6 +155,61 @@ results dest="./results":
         exit 1
     fi
 
+# Wait for all running requests to drain on prefill and decode pods.
+drain:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    NS={{NAMESPACE}}
+    echo "Waiting for all requests to drain..."
+    while true; do
+        TOTAL=0
+        for pod in $(kubectl get pods -n "$NS" -l llm-d.ai/role=prefill -o jsonpath='{.items[*].metadata.name}'); do
+            for port in 8000 8001 8002 8003 8004 8005 8006 8007; do
+                N=$(kubectl exec -n "$NS" "$pod" -c vllm -- \
+                    curl -sf "http://localhost:${port}/metrics" 2>/dev/null \
+                    | grep '^vllm:num_requests_running' | awk '{printf "%d", $2}') || N=0
+                TOTAL=$((TOTAL + N))
+            done
+        done
+        for pod in $(kubectl get pods -n "$NS" -l llm-d.ai/role=decode -o jsonpath='{.items[*].metadata.name}'); do
+            N=$(kubectl exec -n "$NS" "$pod" -c vllm -- \
+                curl -sf "http://localhost:8200/metrics" 2>/dev/null \
+                | grep '^vllm:num_requests_running' | awk '{printf "%d", $2}') || N=0
+            TOTAL=$((TOTAL + N))
+        done
+        if [ "$TOTAL" -eq 0 ]; then
+            echo "All requests drained."
+            break
+        fi
+        echo "  $TOTAL requests still running, waiting 5s..."
+        sleep 5
+    done
+
+# Clear NVMe KV cache on all prefill and decode nodes between benchmark runs.
+clear-kv-cache:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    NS={{NAMESPACE}}
+    # Reset vLLM prefix cache (GPU + CPU tiers) via API
+    for pod in $(kubectl get pods -n "$NS" -l llm-d.ai/role=prefill -o jsonpath='{.items[*].metadata.name}'); do
+        echo "Resetting prefix cache on prefill $pod..."
+        for port in 8000 8001 8002 8003 8004 8005 8006 8007; do
+            kubectl exec -n "$NS" "$pod" -c vllm -- \
+                curl -sf -X POST "http://localhost:${port}/reset_prefix_cache?reset_external=true" 2>/dev/null || true
+        done
+    done
+    for pod in $(kubectl get pods -n "$NS" -l llm-d.ai/role=decode -o jsonpath='{.items[*].metadata.name}'); do
+        echo "Resetting prefix cache on decode $pod..."
+        kubectl exec -n "$NS" "$pod" -c vllm -- \
+            curl -sf -X POST "http://localhost:8200/reset_prefix_cache?reset_external=true" 2>/dev/null || true
+    done
+    # Clear NVMe filesystem tier
+    for pod in $(kubectl get pods -n "$NS" -l llm-d.ai/role -o jsonpath='{.items[*].metadata.name}'); do
+        echo "Clearing NVMe KV cache on $pod..."
+        kubectl exec -n "$NS" "$pod" -c vllm -- rm -rf /mnt/nvme-cache/* 2>/dev/null || true
+    done
+    echo "All prefix caches reset (GPU + CPU + NVMe)."
+
 # Delete benchmark artifacts from the runner pod.
 wipe:
     kubectl exec -n {{NAMESPACE}} deploy/{{deploy}} -- rm -rf /workspace/artifacts
@@ -708,6 +763,8 @@ sweep-concurrency prefix="sweep" dest="." duration="900":
             continue
         fi
         echo "=== concurrency=$C ({{duration}}s) ==="
+        just drain
+        just clear-kv-cache
         if ! just warmup || ! just run $C {{duration}}; then
             echo "FAILED: concurrency=$C, skipping"
             FAILED="${FAILED} c${C}"
