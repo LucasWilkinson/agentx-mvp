@@ -73,6 +73,24 @@ def discover_configs(results_dir):
                     run_data[key] = {s: val[s] for s in STAT_KEYS if s in val}
                     if key not in metric_units:
                         metric_units[key] = val.get('unit', '')
+
+            logs_dir = os.path.join(config_dir, sub, 'logs')
+            kv_cache_tokens = None
+            if os.path.isdir(logs_dir):
+                for lf in os.listdir(logs_dir):
+                    if 'decode' in lf and lf.endswith('.log'):
+                        lpath = os.path.join(logs_dir, lf)
+                        with open(lpath) as lfile:
+                            for line in lfile:
+                                m_kv = re.search(r'GPU KV cache size:\s*([\d,]+)\s*tokens', line)
+                                if m_kv:
+                                    kv_cache_tokens = int(m_kv.group(1).replace(',', ''))
+                                    break
+                        if kv_cache_tokens is not None:
+                            break
+            if kv_cache_tokens is not None:
+                run_data['_kv_cache_tokens'] = kv_cache_tokens
+
             runs[c_val] = run_data
 
         if not runs:
@@ -432,6 +450,33 @@ function metricLabel(key) {{
   return key.replace(/_/g, ' ');
 }}
 
+const NORM_MODES = [
+  {{ value: 'none', text: 'none' }},
+  {{ value: 'decode', text: '/ decode GPUs' }},
+  {{ value: 'total', text: '/ total GPUs' }},
+  {{ value: 'cost_decode', text: '$/M tok (decode GPUs)' }},
+  {{ value: 'cost_total', text: '$/M tok (total GPUs)' }},
+];
+
+let gpuCostPerHour = 0;
+
+function applyNorm(val, norm, meta) {{
+  if (val == null || val === 0) return null;
+  if (norm === 'decode') return val / meta.decodeGPUs;
+  if (norm === 'total') return val / (meta.decodeGPUs + meta.prefillGPUs);
+  if (norm === 'cost_decode') return (meta.decodeGPUs * gpuCostPerHour * 1e6) / (val * 3600);
+  if (norm === 'cost_total') return ((meta.decodeGPUs + meta.prefillGPUs) * gpuCostPerHour * 1e6) / (val * 3600);
+  return val;
+}}
+
+function normSuffix(norm) {{
+  if (norm === 'decode') return ' / decode GPU';
+  if (norm === 'total') return ' / total GPU';
+  if (norm === 'cost_decode') return ' ($/M tokens, decode)';
+  if (norm === 'cost_total') return ' ($/M tokens, total)';
+  return '';
+}}
+
 function hoverText(cfg, c, d) {{
   const meta = CONFIGS[cfg];
   const out = d.output_token_throughput;
@@ -446,22 +491,16 @@ function hoverText(cfg, c, d) {{
     `TTFT avg: ${{ttft ? (ttft.avg/1000).toFixed(1) : '?'}}s · p50: ${{ttft ? (ttft.p50/1000).toFixed(1) : '?'}}s · p99: ${{ttft ? (ttft.p99/1000).toFixed(1) : '?'}}s`;
 }}
 
-const Y_MODES = {{
-  decode: {{ label: 'tok/s per decode GPU', title: 'Output Token Throughput / Decode GPU (tok/s/GPU)',
-             fn: (d, meta) => {{ const o = d.output_token_throughput; return o ? o.avg / meta.decodeGPUs : null; }} }},
-  total:  {{ label: 'tok/s per total GPU', title: 'Output Token Throughput / Total GPU (tok/s/GPU)',
-             fn: (d, meta) => {{ const o = d.output_token_throughput; return o ? o.avg / (meta.decodeGPUs + meta.prefillGPUs) : null; }} }},
-  raw:    {{ label: 'tok/s (raw)', title: 'Output Token Throughput (tok/s)',
-             fn: (d) => {{ const o = d.output_token_throughput; return o ? o.avg : null; }} }},
-}};
-
 const allCharts = [];
 
 function createChart(container, defaults) {{
   const state = {{
     xMetric: defaults.xMetric || 'output_token_throughput_per_user',
     xStat: defaults.xStat || 'avg',
-    yMode: defaults.yMode || 'decode',
+    xNorm: defaults.xNorm || 'none',
+    yMetric: defaults.yMetric || 'output_token_throughput',
+    yStat: defaults.yStat || 'avg',
+    yNorm: defaults.yNorm || 'decode',
     el: null,
   }};
 
@@ -489,11 +528,41 @@ function createChart(container, defaults) {{
   const metricOpts = Object.keys(METRICS).sort().map(k => ({{
     value: k, text: metricLabel(k) + (METRICS[k].unit ? ` (${{METRICS[k].unit}})` : '')
   }}));
-  mkSelect('X:', metricOpts, state.xMetric, v => {{ state.xMetric = v; update(); }});
-  mkSelect('Stat:', STAT_KEYS.map(s => ({{ value: s, text: s }})), state.xStat, v => {{ state.xStat = v; update(); }});
-  mkSelect('Y:', Object.entries(Y_MODES).map(([k, m]) => ({{ value: k, text: m.label }})), state.yMode, v => {{ state.yMode = v; update(); }});
+  const statOpts = STAT_KEYS.map(s => ({{ value: s, text: s }}));
 
-  container.appendChild(ctrl);
+  // X row
+  const xDiv = document.createElement('div');
+  xDiv.className = 'axis-controls';
+  xDiv.style.borderBottom = '1px solid #2a2a2e';
+  function mkSelIn(parent, label, options, value, onChange) {{
+    const lbl = document.createElement('label');
+    lbl.textContent = label;
+    const sel = document.createElement('select');
+    options.forEach(o => {{
+      const opt = document.createElement('option');
+      opt.value = o.value;
+      opt.textContent = o.text;
+      sel.appendChild(opt);
+    }});
+    sel.value = value;
+    sel.addEventListener('change', () => onChange(sel.value));
+    lbl.appendChild(sel);
+    parent.appendChild(lbl);
+    return sel;
+  }}
+
+  mkSelIn(xDiv, 'X:', metricOpts, state.xMetric, v => {{ state.xMetric = v; update(); }});
+  mkSelIn(xDiv, 'stat:', statOpts, state.xStat, v => {{ state.xStat = v; update(); }});
+  mkSelIn(xDiv, 'norm:', NORM_MODES, state.xNorm, v => {{ state.xNorm = v; update(); }});
+  container.appendChild(xDiv);
+
+  // Y row
+  const yDiv = document.createElement('div');
+  yDiv.className = 'axis-controls';
+  mkSelIn(yDiv, 'Y:', metricOpts, state.yMetric, v => {{ state.yMetric = v; update(); }});
+  mkSelIn(yDiv, 'stat:', statOpts, state.yStat, v => {{ state.yStat = v; update(); }});
+  mkSelIn(yDiv, 'norm:', NORM_MODES, state.yNorm, v => {{ state.yNorm = v; update(); }});
+  container.appendChild(yDiv);
 
   // Panel
   const panel = document.createElement('div');
@@ -506,14 +575,27 @@ function createChart(container, defaults) {{
   new ResizeObserver(() => Plotly.Plots.resize(plot)).observe(panel);
   state.el = plot;
 
+  function axisTitle(metric, stat, norm) {{
+    const name = metricLabel(metric);
+    const unit = METRICS[metric]?.unit || '';
+    const ss = stat === 'avg' ? '' : ` (${{stat}})`;
+    const ns = normSuffix(norm);
+    return `${{name}}${{ss}}${{ns}} (${{unit}})`;
+  }}
+
   function buildTraces() {{
-    const ym = Y_MODES[state.yMode];
     return CONFIG_KEYS.map(cfg => {{
       const meta = CONFIGS[cfg];
       const validConcs = CONCURRENCIES.filter(c => DATA[cfg] && DATA[cfg][c]);
       return {{
-        x: validConcs.map(c => {{ const m = DATA[cfg][c][state.xMetric]; return m ? m[state.xStat] : null; }}),
-        y: validConcs.map(c => ym.fn(DATA[cfg][c], meta)),
+        x: validConcs.map(c => {{
+          const m = DATA[cfg][c][state.xMetric];
+          return m ? applyNorm(m[state.xStat], state.xNorm, meta) : null;
+        }}),
+        y: validConcs.map(c => {{
+          const m = DATA[cfg][c][state.yMetric];
+          return m ? applyNorm(m[state.yStat], state.yNorm, meta) : null;
+        }}),
         text: validConcs.map(c => hoverText(cfg, c, DATA[cfg][c])),
         hoverinfo: 'text',
         mode: 'lines+markers+text',
@@ -528,15 +610,11 @@ function createChart(container, defaults) {{
   }}
 
   function getLayout() {{
-    const unit = METRICS[state.xMetric]?.unit || '';
-    const name = metricLabel(state.xMetric);
-    const ss = state.xStat === 'avg' ? '' : ` (${{state.xStat}})`;
-    const ym = Y_MODES[state.yMode];
     return {{
       ...LAYOUT_DEFAULTS,
-      title: {{ text: `${{ym.title.split('(')[0].trim()}} vs ${{name}}${{ss}}`, font: {{ size: 13, color: '#d8d9da' }} }},
-      xaxis: {{ ...LAYOUT_DEFAULTS.xaxis, title: {{ text: `${{name}}${{ss}} (${{unit}})`, font: {{ size: 11 }} }} }},
-      yaxis: {{ ...LAYOUT_DEFAULTS.yaxis, title: {{ text: ym.title, font: {{ size: 11 }} }}, rangemode: 'tozero' }},
+      title: {{ text: `${{metricLabel(state.yMetric)}} vs ${{metricLabel(state.xMetric)}}`, font: {{ size: 13, color: '#d8d9da' }} }},
+      xaxis: {{ ...LAYOUT_DEFAULTS.xaxis, title: {{ text: axisTitle(state.xMetric, state.xStat, state.xNorm), font: {{ size: 11 }} }} }},
+      yaxis: {{ ...LAYOUT_DEFAULTS.yaxis, title: {{ text: axisTitle(state.yMetric, state.yStat, state.yNorm), font: {{ size: 11 }} }}, rangemode: 'tozero' }},
       legend: {{ ...LAYOUT_DEFAULTS.legend, x: 0.99, y: 0.99, xanchor: 'right', yanchor: 'top' }},
     }};
   }}
@@ -566,15 +644,20 @@ function createChart(container, defaults) {{
     }});
   }});
 
-  allCharts.push(state);
-  return state;
+  const chart = {{ state, update }};
+  allCharts.push(chart);
+  return chart;
 }}
 
-// ── Hint ──
-const hint = document.createElement('div');
-hint.style.cssText = 'color:#ffffff; font-size:15px; padding:12px 4px 8px;';
+// ── Top bar: hint + cost input ──
+const topBar = document.createElement('div');
+topBar.style.cssText = 'display:flex; justify-content:space-between; align-items:center; padding:12px 4px 8px; flex-wrap:wrap; gap:8px;';
+const hint = document.createElement('span');
+hint.style.cssText = 'color:#ffffff; font-size:15px;';
 hint.textContent = 'Click any data point to open its Prometheus dashboard.';
-root.appendChild(hint);
+topBar.appendChild(hint);
+
+root.appendChild(topBar);
 
 // ── Charts: two side by side ──
 const chartRow = document.createElement('div');
@@ -588,8 +671,29 @@ chartCol2.className = 'chart-col';
 chartRow.appendChild(chartCol1);
 chartRow.appendChild(chartCol2);
 
-createChart(chartCol1, {{ xMetric: 'output_token_throughput_per_user', xStat: 'avg', yMode: 'decode' }});
-createChart(chartCol2, {{ xMetric: 'inter_token_latency', xStat: 'p99', yMode: 'decode' }});
+createChart(chartCol1, {{ xMetric: 'output_token_throughput_per_user', yMetric: 'output_token_throughput', yNorm: 'decode' }});
+createChart(chartCol2, {{ xMetric: 'inter_token_latency', xStat: 'p99', yMetric: 'output_token_throughput', yNorm: 'decode' }});
+
+// ── Cost input ──
+const costWrap = document.createElement('label');
+costWrap.style.cssText = 'color:#8e8e8e; font-size:13px; display:flex; align-items:center; gap:6px; padding:12px 4px 4px;';
+costWrap.textContent = '$/node/hr:';
+const costInput = document.createElement('input');
+costInput.type = 'number';
+costInput.step = '0.01';
+costInput.min = '0';
+costInput.value = '0';
+costInput.placeholder = '0.00';
+costInput.style.cssText = 'background:#181b1f; color:#d8d9da; border:1px solid #2a2a2e; border-radius:4px; padding:4px 8px; font-size:12px; width:80px; font-family:inherit;';
+costInput.addEventListener('input', () => {{
+  gpuCostPerHour = (parseFloat(costInput.value) || 0) / {GPUS_PER_NODE};
+  allCharts.forEach(ch => {{
+    if (ch.state.xNorm.startsWith('cost') || ch.state.yNorm.startsWith('cost')) ch.update();
+  }});
+}});
+gpuCostPerHour = 0;
+costWrap.appendChild(costInput);
+root.appendChild(costWrap);
 
 // ── Section 2: Sortable summary table ──
 const sec2Hdr = document.createElement('div');
@@ -611,9 +715,10 @@ root.appendChild(sec2Wrap);
   table.appendChild(tbody);
 
   const colDefs = [
-    'Config', 'Concurrency', 'Decode GPUs', 'Output tok/s', 'tok/s/GPU',
+    'Config', 'Concurrency', 'Decode GPUs', 'KV Cache (tokens)', 'Output tok/s', 'tok/s/GPU',
     'ITL p50 (ms)', 'ITL p99 (ms)', 'Per-user tok/s',
     'TTFT avg (s)', 'TTFT p50 (s)', 'TTFT p99 (s)', 'TTFT min (s)', 'TTFT max (s)',
+    '$/M input', '$/M output', '$/M total',
   ];
   const headerRow = document.createElement('tr');
   colDefs.forEach((label, i) => {{
@@ -626,12 +731,16 @@ root.appendChild(sec2Wrap);
   }});
   thead.appendChild(headerRow);
 
+  const costCells = [];
+
   for (const cfg of CONFIG_KEYS) {{
     const meta = CONFIGS[cfg];
+    const totalGPUs = meta.decodeGPUs + meta.prefillGPUs;
     for (const c of CONCURRENCIES) {{
       if (!DATA[cfg] || !DATA[cfg][c]) continue;
       const d = DATA[cfg][c];
       const out = d.output_token_throughput;
+      const inp = d.input_token_throughput;
       const itl = d.inter_token_latency;
       const otpu = d.output_token_throughput_per_user;
       const ttft = d.time_to_first_token;
@@ -641,8 +750,11 @@ root.appendChild(sec2Wrap);
       tr.dataset.cfg = cfg;
       tr.dataset.conc = c;
 
+      const kvCache = d._kv_cache_tokens;
+      const kvStr = kvCache != null ? kvCache.toLocaleString() : '-';
+
       const vals = [
-        meta.label, C_LABELS[c], meta.decodeGPUs,
+        meta.label, C_LABELS[c], meta.decodeGPUs, kvStr,
         out?.avg?.toFixed(1) ?? '-', norm,
         itl?.p50?.toFixed(1) ?? '-', itl?.p99?.toFixed(1) ?? '-',
         otpu?.avg?.toFixed(1) ?? '-',
@@ -651,17 +763,44 @@ root.appendChild(sec2Wrap);
         ttft ? (ttft.p99/1000).toFixed(1) : '-',
         ttft ? (ttft.min/1000).toFixed(1) : '-',
         ttft ? (ttft.max/1000).toFixed(1) : '-',
+        '-', '-', '-',
       ];
       vals.forEach((v, i) => {{
         const td = document.createElement('td');
         td.textContent = v;
         if (i === 0) {{ td.style.color = COLORS[cfg]; td.style.fontWeight = '500'; }}
-        if (i === 4) td.className = 'highlight';
+        if (i === 5) td.className = 'highlight';
         tr.appendChild(td);
       }});
+
+      const ci = colDefs.length;
+      costCells.push({{
+        inpTd: tr.cells[ci-3],
+        outTd: tr.cells[ci-2],
+        totTd: tr.cells[ci-1],
+        inpTps: inp?.avg ?? 0,
+        outTps: out?.avg ?? 0,
+        prefillGPUs: meta.prefillGPUs,
+        decodeGPUs: meta.decodeGPUs,
+        totalGPUs,
+      }});
+
       tbody.appendChild(tr);
     }}
   }}
+
+  function costPerMTok(gpus, tps) {{
+    return (gpuCostPerHour > 0 && tps > 0) ? ((gpus * gpuCostPerHour * 1e6) / (tps * 3600)).toFixed(2) : '-';
+  }}
+  function updateCostCols() {{
+    costCells.forEach(cc => {{
+      cc.inpTd.textContent = costPerMTok(cc.prefillGPUs, cc.inpTps);
+      cc.outTd.textContent = costPerMTok(cc.decodeGPUs, cc.outTps);
+      cc.totTd.textContent = costPerMTok(cc.totalGPUs, cc.inpTps + cc.outTps);
+    }});
+  }}
+  updateCostCols();
+  costInput.addEventListener('input', updateCostCols);
 
   let sortCol = -1, sortAsc = true;
   function sortTableBy(col, th) {{

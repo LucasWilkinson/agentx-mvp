@@ -380,8 +380,6 @@ setup-namespace ns:
     fi
     # Service account
     kubectl apply -n {{ns}} -f "$ROOT/guides/wide-ep-lws/modelserver/gpu/vllm-glm-5.2/base/serviceAccount.yaml"
-    # DCGM metrics ConfigMap (for dcgm-exporter sidecar)
-    kubectl apply -n {{ns}} -f "$ROOT/guides/wide-ep-lws/modelserver/gpu/vllm-glm-5.2/base/dcgm-custom-metrics.yaml"
     # Gateway (configmap + gateway via kustomize)
     kubectl kustomize "$ROOT/guides/recipes/gateway/istio/" | kubectl apply -n {{ns}} -f -
     # InferenceModel
