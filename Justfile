@@ -740,10 +740,17 @@ start-pd prefill_replicas decode_size:
     # Deploy prefill/decode LWS
     PREFILL_REPLICAS={{prefill_replicas}} envsubst '${PREFILL_REPLICAS}' < {{pd_prefill}} | kubectl apply -n {{NAMESPACE}} -f -
     DECODE_SIZE={{decode_size}} envsubst '${DECODE_SIZE}' < {{pd_decode}} | kubectl apply -n {{NAMESPACE}} -f -
+    # Deploy KV cache evictor for NVMe tier cleanup
+    kubectl apply -n {{NAMESPACE}} -f "$ROOT/guides/wide-ep-lws/modelserver/gpu/vllm-glm-5.2/base/kv-cache-evictor.yaml"
     echo "Deployed P{{prefill_replicas}} D{{decode_size}} — waiting for pods..."
     kubectl rollout status --watch statefulset/wide-ep-lws-nvidia-gpu-vllm-glm-5-2-prefill -n {{NAMESPACE}} --timeout=7200s &
     kubectl rollout status --watch statefulset/wide-ep-lws-nvidia-gpu-vllm-glm-5-2-decode -n {{NAMESPACE}} --timeout=7200s &
     wait
+    # Clear stale mmap files and KV cache from previous runs
+    for pod in $(kubectl get pods -n {{NAMESPACE}} -l llm-d.ai/role -o jsonpath='{.items[*].metadata.name}'); do
+        kubectl exec -n {{NAMESPACE}} "$pod" -c vllm -- find /dev/shm -name 'vllm_offload*' -delete 2>/dev/null || true
+    done
+    just clear-kv-cache
 
 # Tear down PD deployment.
 stop-pd:
