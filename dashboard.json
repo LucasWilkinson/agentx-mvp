@@ -317,7 +317,7 @@
                 "color": "rgba(255,0,255,0.7)"
               },
               "filterValues": {
-                "le": 1e-9
+                "le": 1e-09
               },
               "legend": {
                 "show": true
@@ -431,7 +431,7 @@
                 "color": "rgba(255,0,255,0.7)"
               },
               "filterValues": {
-                "le": 1e-9
+                "le": 1e-09
               },
               "legend": {
                 "show": true
@@ -2616,5 +2616,6 @@
         "sort": "disabled"
       }
     }
-  ]
+  ],
+  "uid": "wideep-overview"
 }
