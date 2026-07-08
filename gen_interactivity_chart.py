@@ -26,33 +26,56 @@ COLORS = [
 ]
 
 
+def read_model_label(results_dir):
+    candidates = [Path(results_dir) / 'model_label.txt']
+    candidates.extend(sorted(Path(results_dir).glob('results_*/model_label.txt')))
+    for path in candidates:
+        if path.is_file():
+            label = path.read_text().strip()
+            if label:
+                return label
+    return os.environ.get('MODEL_LABEL', 'DeepSeek-V4-Pro')
+
+
+def read_text_file(path, default=''):
+    try:
+        text = Path(path).read_text().strip()
+    except OSError:
+        return default
+    return text or default
+
+
+def read_int_file(path, default):
+    try:
+        return int(read_text_file(path, str(default)))
+    except ValueError:
+        return default
+
+
 def discover_configs(results_dir):
     """Auto-discover deployment configs and concurrency levels from folder structure.
 
     Expected layout:
         results_dir/
-            results_p1_d1/
-                results_p1_d1_c1/profile_export_aiperf.json
-                results_p1_d1_c4/...
-            results_p1_d2/
-                ...
+            results_<user>-wide-ep/
+                results_<user>-wide-ep_c1/profile_export_aiperf.json
+                results_<user>-wide-ep_c16/...
     """
     configs = {}
     metric_units = {}
-    config_pattern = re.compile(r'^results_(p(\d+)_d(\d+))$')
 
     for entry in sorted(os.listdir(results_dir)):
-        m = config_pattern.match(entry)
-        if not m:
+        if not entry.startswith('results_'):
             continue
-        config_name = m.group(1)
-        n_prefill = int(m.group(2))
-        n_decode = int(m.group(3))
-        decode_gpus = n_decode * GPUS_PER_NODE
-
         config_dir = os.path.join(results_dir, entry)
         if not os.path.isdir(config_dir):
             continue
+
+        config_name = entry[len('results_'):]
+        decode_gpus = read_int_file(os.path.join(config_dir, 'decode_gpus.txt'), GPUS_PER_NODE)
+        prefill_gpus = read_int_file(os.path.join(config_dir, 'prefill_gpus.txt'), GPUS_PER_NODE)
+        default_label = config_name
+        default_pods = read_text_file(os.path.join(config_dir, 'pods.txt'), config_name)
 
         conc_pattern = re.compile(rf'^results_{re.escape(config_name)}_c(\d+)$')
         runs = {}
@@ -110,12 +133,13 @@ def discover_configs(results_dir):
                     with open(ypath) as yf:
                         yamls[yname] = yf.read()
 
-        prefill_gpus = n_prefill * GPUS_PER_NODE
+        label = read_text_file(os.path.join(config_dir, 'config_label.txt'), default_label)
+        pods = read_text_file(os.path.join(config_dir, 'pods.txt'), default_pods)
         configs[config_name] = {
-            'label': f'{n_prefill}P {n_decode}D',
+            'label': label,
             'decode_gpus': decode_gpus,
             'prefill_gpus': prefill_gpus,
-            'pods': f'{n_prefill} prefill + {n_decode} decode',
+            'pods': pods,
             'runs': dict(sorted(runs.items())),
             'version': version,
             'yamls': yamls,
@@ -160,6 +184,7 @@ def highlight_yaml(text):
 
 
 def generate_html(configs, output_path, results_dir, metric_units):
+    model_label = read_model_label(results_dir)
     color_map = {}
     for i, cfg in enumerate(sorted(configs.keys())):
         color_map[cfg] = COLORS[i % len(COLORS)]
@@ -227,7 +252,7 @@ def generate_html(configs, output_path, results_dir, metric_units):
 <html>
 <head>
 <meta charset="utf-8">
-<title>GLM-5.2-FP8 — Interactivity vs Throughput — vLLM {version_str}</title>
+<title>{model_label} — Interactivity vs Throughput — vLLM {version_str}</title>
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 <style>
   * {{ margin: 0; padding: 0; box-sizing: border-box; }}
@@ -296,7 +321,7 @@ def generate_html(configs, output_path, results_dir, metric_units):
 </style>
 </head>
 <body>
-<h1>GLM-5.2-FP8 Disaggregated Serving — Interactivity vs Throughput</h1>
+<h1>{model_label} Disaggregated Serving — Interactivity vs Throughput</h1>
 <div class="subtitle">vLLM {version_str} &middot; {len(configs)} deployment configs &middot; {len(sorted_conc)} concurrency levels</div>
 
 <div id="root"></div>
@@ -850,7 +875,7 @@ def main():
 
     configs, metric_units = discover_configs(results_dir)
     if not configs:
-        print(f"Error: no results_pN_dM/ directories found in {results_dir}", file=sys.stderr)
+        print(f"Error: no results_<config>/ directories found in {results_dir}", file=sys.stderr)
         sys.exit(1)
 
     output_dir = os.path.dirname(os.path.abspath(results_dir))

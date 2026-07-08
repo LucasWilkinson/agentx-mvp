@@ -1,8 +1,8 @@
 # AIPerf AgentX-MVP benchmark runner.
 #
 # Deploys quay.io/rh-ee-robshaw/aiperf:agentx-v0 as a long-lived "sleep infinity"
-# pod into the same namespace as the llm-d optimized-baseline deployment, so it
-# can reach the router's OpenAI-compatible endpoint over in-cluster DNS. Drive it
+# pod into the configured benchmark namespace, so it can reach the manifesto
+# gateway's OpenAI-compatible endpoint over in-cluster DNS. Drive it
 # with `kubectl exec` (see the justfile).
 apiVersion: apps/v1
 kind: Deployment

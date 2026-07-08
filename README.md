@@ -1,22 +1,26 @@
 # AgentX-MVP Benchmark
 
-AIPerf AgentX-MVP benchmark harness for llm-d optimized-baseline deployments with prefill/decode disaggregation.
+AIPerf AgentX-MVP benchmark harness for llm-d/manifesto deployments with prefill/decode disaggregation.
 
 ## Prerequisites
 
 - `kubectl` configured for your cluster
 - `.env` file with:
   ```
-  NAMESPACE=ecrncevi-dev
-  GLM_PD_PREFILL=path/to/prefill.yaml
-  GLM_PD_DECODE=path/to/decode.yaml
+  NAMESPACE=vllm
+  MANIFESTO_ROOT=$HOME/code/llm-manifesto
+  MODEL_SPEC=models/deepseek-v4/1P-EP8-1D-EP8.yaml
+  MANIFESTO_CLUSTER=clusters/oci-gb200.yaml
+  MANIFESTO_USER=$USER
   ```
 - Grafana port-forwarded to `localhost:3001` (for dashboard export)
+
+Defaults target `deepseek-ai/DeepSeek-V4-Pro` on the smallest GB200/NVL72 manifesto profile and use only the existing `vllm` namespace.
 
 ## Quick start
 
 ```bash
-just deploy          # deploy the aiperf runner pod
+just setup           # configure monitoring and deploy the aiperf runner
 just check           # verify the model endpoint is reachable
 just run             # run benchmark (default: concurrency=64, duration=900s)
 just run 16 900      # override concurrency / duration
@@ -27,29 +31,25 @@ just shell           # shell into the runner
 just clean           # delete the runner pod
 ```
 
-## P:D deployment
+## Model Deployment
 
 ```bash
-just start-pd 2 1    # deploy 2 prefill replicas, 1 decode node (8 GPUs via EP)
-just stop-pd         # tear down prefill/decode pods
+just start-model     # deploy the llm-manifesto spec
+just stop-model      # tear down the manifesto deployment
 ```
 
 ## Sweep
 
-Run the full benchmark across multiple P:D configurations and concurrency levels (powers of 4: 1, 4, 16, 64):
+Run the benchmark across concurrency levels (`1`, `16`, `64`, `256`) for the configured manifesto spec:
 
 ```bash
-# Single P:D config
-just sweep "1:2"
-
-# Multiple configs — each gets deployed, swept, then torn down
-just sweep "1:2 2:1 2:2"
+just sweep results_deepseekv4_nvl72
 
 # Custom duration (default 900s)
-just sweep "1:2" 1200
+just sweep results_deepseekv4_nvl72 1200
 ```
 
-Each sweep produces result directories like `results_p1_d2_c1/`, `results_p1_d2_c4/`, etc. containing:
+Each sweep produces result directories like `results_$USER-wide-ep-1p-ep8-1d-ep8/results_$USER-wide-ep-1p-ep8-1d-ep8_c1/`, `results_$USER-wide-ep-1p-ep8-1d-ep8/results_$USER-wide-ep-1p-ep8-1d-ep8_c16/`, etc. Each run directory contains:
 - `profile_export_aiperf.json` — benchmark metrics
 - `profile_export.jsonl` — per-request data
 - `prefill.yaml` / `decode.yaml` — pod specs at time of run
@@ -62,7 +62,7 @@ Export Grafana dashboards for benchmark result directories. Automatically extrac
 
 ```bash
 # Export dashboards for specific result directories
-just scrape-grafana results_p1_d2_c1 results_p1_d2_c4
+just scrape-grafana results_$USER-wide-ep-1p-ep8-1d-ep8/results_$USER-wide-ep-1p-ep8-1d-ep8_c1
 
 # Or use the script directly for a single time range
 python3 export_dashboard.py single --start now-30m --end now -o report.html
@@ -72,11 +72,11 @@ Each result directory gets a self-contained `dashboard.html` with interactive Pl
 
 ## Dashboard overlay / comparison
 
-Overlay multiple dashboard exports onto the same charts for side-by-side comparison (e.g. different concurrency levels or P:D configs). X-axis is rebased to relative time (seconds from start) so runs that happened at different absolute times align.
+Overlay multiple dashboard exports onto the same charts for side-by-side comparison across concurrency levels. X-axis is rebased to relative time (seconds from start) so runs that happened at different absolute times align.
 
 ```bash
 # Overlay three concurrency levels — auto-labeled from filenames
-python3 overlay_dashboards.py results_p1_d2_c1/dashboard.html results_p1_d2_c4/dashboard.html results_p1_d2_c16/dashboard.html
+python3 overlay_dashboards.py results_$USER-wide-ep-1p-ep8-1d-ep8/results_$USER-wide-ep-1p-ep8-1d-ep8_c1/dashboard.html results_$USER-wide-ep-1p-ep8-1d-ep8/results_$USER-wide-ep-1p-ep8-1d-ep8_c16/dashboard.html
 
 # Custom labels
 python3 overlay_dashboards.py c1.html c4.html --label "concurrency=1" --label "concurrency=4"
@@ -89,7 +89,7 @@ Each concurrency level gets a distinct color across all panels.
 Capture the vLLM version from a running deployment:
 
 ```bash
-just vllm-version results_p1_d2
+just vllm-version results_$USER-wide-ep-1p-ep8-1d-ep8
 ```
 
 This is called automatically during sweeps.
