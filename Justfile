@@ -25,6 +25,13 @@ model     := env_var_or_default('MODEL', 'deepseek-ai/DeepSeek-V4-Pro')
 model_label := env_var_or_default('MODEL_LABEL', 'DeepSeek-V4-Pro')
 max_context_length := env_var_or_default('MAX_CONTEXT_LENGTH', '128000')
 url       := env_var_or_default('URL', '')
+server_metrics_url := env_var_or_default('SERVER_METRICS_URL', '')
+gpu_telemetry_urls := env_var_or_default('GPU_TELEMETRY_URLS', '')
+monitoring_namespace := env_var_or_default('MONITORING_NAMESPACE', NAMESPACE)
+prometheus_namespace := env_var_or_default('PROMETHEUS_NAMESPACE', monitoring_namespace)
+prometheus_service := env_var_or_default('PROMETHEUS_SERVICE', 'prometheus-server')
+grafana_namespace := env_var_or_default('GRAFANA_NAMESPACE', monitoring_namespace)
+grafana_service := env_var_or_default('GRAFANA_SERVICE', 'grafana')
 concurrency := "64"
 duration    := "900"
 
@@ -78,6 +85,8 @@ run concurrency=concurrency duration=duration:
     NS={{NAMESPACE}}
     DEPLOY={{deploy}}
     URL=$(just --quiet _model-url)
+    SERVER_METRICS_ARGS=$(just --quiet _server-metrics-args)
+    GPU_TELEMETRY_ARGS=$(just --quiet _gpu-telemetry-args)
     POD=$(kubectl get pod -n "$NS" -l app=$DEPLOY -o jsonpath='{.items[0].metadata.name}')
     # Kill any existing benchmark before launching a new one
     kubectl exec -n "$NS" "$POD" -- bash -c '
@@ -100,6 +109,8 @@ run concurrency=concurrency duration=duration:
       --public-dataset semianalysis_cc_traces_weka_with_subagents \
       --concurrency {{concurrency}} \
       --benchmark-duration {{duration}} \
+      $SERVER_METRICS_ARGS \
+      $GPU_TELEMETRY_ARGS \
       --output-artifact-dir /workspace/artifacts \
       --ui simple \
       > /workspace/aiperf.log 2>&1
@@ -121,12 +132,14 @@ run concurrency=concurrency duration=duration:
         exit 1
     fi
 
-# Fast plumbing validation (~60s). Uses --unsafe-override so it runs below the
+# Fast plumbing validation. Uses --unsafe-override so it runs below the
 # scenario's 900s minimum; result is marked submission_valid: false.
-smoke:
+smoke concurrency="1" duration="60":
     #!/usr/bin/env bash
     set -euo pipefail
     URL=$(just --quiet _model-url)
+    SERVER_METRICS_ARGS=$(just --quiet _server-metrics-args)
+    GPU_TELEMETRY_ARGS=$(just --quiet _gpu-telemetry-args)
     kubectl exec -n {{NAMESPACE}} deploy/{{deploy}} -- \
       aiperf profile \
         --scenario inferencex-agentx-mvp \
@@ -140,8 +153,32 @@ smoke:
         --public-dataset semianalysis_cc_traces_weka_with_subagents \
         --concurrency {{concurrency}} \
         --benchmark-duration {{duration}} \
+        $SERVER_METRICS_ARGS \
+        $GPU_TELEMETRY_ARGS \
         --output-artifact-dir /workspace/artifacts \
         --ui simple
+
+# End-to-end smoke workflow: run a small profile, copy artifacts, export the
+# Grafana dashboard, and build interactivity_vs_throughput.html.
+smoke-e2e dest="results_smoke" concurrency="1" duration="60":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    DEST="{{dest}}"
+    C="{{concurrency}}"
+    D="{{duration}}"
+    if [ -e "$DEST" ]; then
+        DEST="${DEST}_$(date -u +%Y%m%dT%H%M%SZ)"
+    fi
+    just wipe 2>/dev/null || true
+    just smoke "$C" "$D"
+    just results "$DEST"
+    just dump-logs "$DEST"
+    just report "$DEST" || true
+    just _smoke-interactivity "$DEST" "$C"
+    echo "=== Smoke artifacts: $DEST ==="
+    echo "  AIPerf:       $DEST/profile_export_aiperf.json"
+    echo "  Dashboard:    $DEST/dashboard.html"
+    echo "  Interactivity: $DEST/interactivity_vs_throughput.html"
 
 # Copy benchmark artifacts out of the runner to a local directory (default ./results).
 results dest="./results":
@@ -310,7 +347,7 @@ report outdir:
             SETUP_NAMESPACES="${SETUP_NAMESPACES}|${NS}|${POD}|"
         fi
         POD=$(echo "$SETUP_NAMESPACES" | grep -o "|${NS}|[^|]*|" | head -1 | cut -d'|' -f3)
-        GRAFANA_URL="http://grafana.${NS}.svc.cluster.local:80"
+        GRAFANA_URL="http://{{grafana_service}}.{{grafana_namespace}}.svc.cluster.local:80"
         NAME=$(basename "$dir")
         echo "=== $NAME ($NS): scraping Grafana ==="
         TIMESTAMPS=$(python3 -c "import json; d=json.load(open('$dir/profile_export_aiperf.json')); print(d['min_request_timestamp']['avg']/1e9-60); print(d['max_response_timestamp']['avg']/1e9+60)")
@@ -337,263 +374,31 @@ report outdir:
         fi
         if echo "$SNAPPED" | grep -q "|${NS}|"; then continue; fi
         SNAPPED="${SNAPPED}|${NS}|"
-        PROM_POD=$(kubectl get pod -n "$NS" -l app.kubernetes.io/name=prometheus,app.kubernetes.io/component=server -o jsonpath='{.items[0].metadata.name}' 2>/dev/null) || continue
-        echo "=== $NS: snapshotting Prometheus TSDB ==="
-        SNAP_NAME=$(kubectl exec -n "$NS" "$PROM_POD" -c prometheus-server -- \
+        PROM_NS="{{prometheus_namespace}}"
+        PROM_POD=$(kubectl get pod -n "$PROM_NS" -l app.kubernetes.io/name=prometheus,app.kubernetes.io/component=server -o jsonpath='{.items[0].metadata.name}' 2>/dev/null) || continue
+        echo "=== $PROM_NS: snapshotting Prometheus TSDB for $NS ==="
+        SNAP_NAME=$(kubectl exec -n "$PROM_NS" "$PROM_POD" -c prometheus-server -- \
             wget -qO- --post-data= http://localhost:9090/api/v1/admin/tsdb/snapshot 2>/dev/null \
             | python3 -c "import json,sys; print(json.load(sys.stdin)['data']['name'])" 2>/dev/null) || {
-            echo "  WARNING: snapshot failed for $NS, skipping"
+            echo "  WARNING: snapshot failed for $PROM_NS, skipping"
             continue
         }
         SNAP_DIR="$PARENT/prometheus_snapshot"
         mkdir -p "$SNAP_DIR"
-        kubectl cp "$NS/${PROM_POD}:/data/snapshots/${SNAP_NAME}" "$SNAP_DIR" -c prometheus-server 2>/dev/null || {
-            echo "  WARNING: snapshot copy failed for $NS"
+        kubectl cp "$PROM_NS/${PROM_POD}:/data/snapshots/${SNAP_NAME}" "$SNAP_DIR" -c prometheus-server 2>/dev/null || {
+            echo "  WARNING: snapshot copy failed for $PROM_NS"
             continue
         }
-        kubectl exec -n "$NS" "$PROM_POD" -c prometheus-server -- rm -rf "/data/snapshots/${SNAP_NAME}" 2>/dev/null || true
+        kubectl exec -n "$PROM_NS" "$PROM_POD" -c prometheus-server -- rm -rf "/data/snapshots/${SNAP_NAME}" 2>/dev/null || true
         echo "  Saved to $SNAP_DIR"
     done
     python3 gen_interactivity_chart.py "$(dirname "{{outdir}}")" 2>/dev/null || true
 
 
-# Configure monitoring, dashboards, and the benchmark runner in the existing namespace.
+# Deploy the benchmark runner. Model and monitoring resources are owned by manifesto.
 setup:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    NS={{NAMESPACE}}
-    echo "=== Setting up benchmark support in namespace $NS ==="
-    kubectl apply -n "$NS" -f - <<RBACEOF
-    apiVersion: rbac.authorization.k8s.io/v1
-    kind: Role
-    metadata:
-      name: prometheus-server
-    rules:
-    - apiGroups: [""]
-      resources: [pods, services, endpoints]
-      verbs: [get, list, watch]
-    - apiGroups: [""]
-      resources: [configmaps]
-      verbs: [get]
-    ---
-    apiVersion: rbac.authorization.k8s.io/v1
-    kind: RoleBinding
-    metadata:
-      name: prometheus-server
-    roleRef:
-      apiGroup: rbac.authorization.k8s.io
-      kind: Role
-      name: prometheus-server
-    subjects:
-    - kind: ServiceAccount
-      name: prometheus-server
-      namespace: ${NS}
-    ---
-    apiVersion: rbac.authorization.k8s.io/v1
-    kind: Role
-    metadata:
-      name: grafana-sidecar
-    rules:
-    - apiGroups: [""]
-      resources: [configmaps, secrets]
-      verbs: [get, list, watch]
-    ---
-    apiVersion: rbac.authorization.k8s.io/v1
-    kind: RoleBinding
-    metadata:
-      name: grafana-sidecar
-    roleRef:
-      apiGroup: rbac.authorization.k8s.io
-      kind: Role
-      name: grafana-sidecar
-    subjects:
-    - kind: ServiceAccount
-      name: grafana
-      namespace: ${NS}
-    RBACEOF
-    kubectl apply -f - <<DCGMRBAC || echo "WARNING: could not create cluster-scope dcgm reader RBAC; continuing"
-    apiVersion: rbac.authorization.k8s.io/v1
-    kind: ClusterRole
-    metadata:
-      name: ${NS}-prometheus-cw-exporters-reader
-    rules:
-    - apiGroups: [""]
-      resources: [pods]
-      verbs: [get, list, watch]
-    ---
-    apiVersion: rbac.authorization.k8s.io/v1
-    kind: ClusterRoleBinding
-    metadata:
-      name: ${NS}-prometheus-cw-exporters-reader
-    roleRef:
-      apiGroup: rbac.authorization.k8s.io
-      kind: ClusterRole
-      name: ${NS}-prometheus-cw-exporters-reader
-    subjects:
-    - kind: ServiceAccount
-      name: prometheus-server
-      namespace: ${NS}
-    DCGMRBAC
-    if ! kubectl get secret hf-secret -n "$NS" >/dev/null 2>&1; then
-        if kubectl get secret llm-d-hf-token -n "$NS" -o json 2>/dev/null \
-          | python3 -c "import json,sys; d=json.load(sys.stdin); d['metadata']={'name':'hf-secret','namespace':'$NS'}; print(json.dumps(d))" \
-          | kubectl apply -f - 2>/dev/null; then
-            true
-        else
-            kubectl create secret generic hf-secret --from-literal=HF_TOKEN=dummy -n "$NS" --dry-run=client -o yaml | kubectl apply -f -
-        fi
-    fi
-    helm upgrade --install prometheus prometheus-community/prometheus \
-      -n "$NS" --version 29.13.0 \
-      --set alertmanager.enabled=false \
-      --set kube-state-metrics.enabled=false \
-      --set prometheus-node-exporter.enabled=false \
-      --set prometheus-pushgateway.enabled=false \
-      --set rbac.create=false \
-      --set server.persistentVolume.enabled=false \
-      --set 'server.extraFlags[0]=web.enable-admin-api' \
-      --set serviceAccounts.server.create=true \
-      --set serviceAccounts.server.name=prometheus-server \
-      --set 'server.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].key=kubernetes.io/arch' \
-      --set 'server.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].operator=In' \
-      --set 'server.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].values[0]=amd64' \
-      -f - <<PROMEOF
-    extraScrapeConfigs: |
-      - job_name: 'vllm-decode'
-        kubernetes_sd_configs:
-          - role: pod
-            namespaces:
-              names: [$NS]
-        relabel_configs:
-          - source_labels: [__meta_kubernetes_pod_label_llm_d_ai_role]
-            regex: decode
-            action: keep
-          - source_labels: [__meta_kubernetes_pod_container_name]
-            regex: vllm
-            action: keep
-          - source_labels: [__meta_kubernetes_pod_container_port_number]
-            regex: '8200'
-            action: keep
-          - source_labels: [__meta_kubernetes_pod_name]
-            target_label: pod
-          - source_labels: [__meta_kubernetes_pod_node_name]
-            target_label: node
-          - source_labels: [__meta_kubernetes_pod_label_llm_d_ai_model]
-            target_label: model
-        scrape_interval: 1s
-        metrics_path: /metrics
-      - job_name: 'vllm-prefill'
-        kubernetes_sd_configs:
-          - role: pod
-            namespaces:
-              names: [$NS]
-        relabel_configs:
-          - source_labels: [__meta_kubernetes_pod_label_llm_d_ai_role]
-            regex: prefill
-            action: keep
-          - source_labels: [__meta_kubernetes_pod_container_name]
-            regex: vllm
-            action: keep
-          - source_labels: [__meta_kubernetes_pod_container_port_number]
-            regex: '8000'
-            action: keep
-          - source_labels: [__meta_kubernetes_pod_name]
-            target_label: pod
-          - source_labels: [__meta_kubernetes_pod_node_name]
-            target_label: node
-          - source_labels: [__meta_kubernetes_pod_label_llm_d_ai_model]
-            target_label: model
-        scrape_interval: 1s
-        metrics_path: /metrics
-      - job_name: 'epp'
-        kubernetes_sd_configs:
-          - role: pod
-            namespaces:
-              names: [$NS]
-        relabel_configs:
-          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_component]
-            regex: epp
-            action: keep
-          - source_labels: [__meta_kubernetes_pod_ip]
-            target_label: __address__
-            replacement: '\${1}:9090'
-          - source_labels: [__meta_kubernetes_pod_name]
-            target_label: pod
-          - source_labels: [__meta_kubernetes_pod_label_inferencepool]
-            target_label: inferencepool
-        scrape_interval: 1s
-        metrics_path: /metrics
-      - job_name: 'dcgm'
-        kubernetes_sd_configs:
-          - role: pod
-            namespaces:
-              names: [cw-exporters]
-        relabel_configs:
-          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
-            regex: dcgm-exporter
-            action: keep
-          - source_labels: [__meta_kubernetes_pod_node_name]
-            target_label: node
-        metric_relabel_configs:
-          - source_labels: [Hostname]
-            target_label: node
-        scrape_interval: 5s
-        metrics_path: /metrics
-      - job_name: 'node-exporter'
-        kubernetes_sd_configs:
-          - role: pod
-            namespaces:
-              names: [$NS]
-        relabel_configs:
-          - source_labels: [__meta_kubernetes_pod_container_name]
-            regex: node-exporter
-            action: keep
-          - source_labels: [__meta_kubernetes_pod_container_port_number]
-            regex: '9100'
-            action: keep
-          - source_labels: [__meta_kubernetes_pod_name]
-            target_label: pod
-          - source_labels: [__meta_kubernetes_pod_node_name]
-            target_label: node
-          - source_labels: [__meta_kubernetes_pod_label_llm_d_ai_role]
-            target_label: role
-        scrape_interval: 5s
-        metrics_path: /metrics
-    PROMEOF
-    helm upgrade --install grafana grafana/grafana \
-      -n "$NS" --version 10.5.15 \
-      --set adminPassword=admin \
-      --set persistence.enabled=false \
-      --set rbac.create=false \
-      --set sidecar.dashboards.enabled=true \
-      --set sidecar.dashboards.label=grafana_dashboard \
-      --set sidecar.dashboards.searchNamespace="$NS" \
-      --set 'affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].key=kubernetes.io/arch' \
-      --set 'affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].operator=In' \
-      --set 'affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].values[0]=amd64' \
-      -f - <<GRAFEOF
-    datasources:
-      datasources.yaml:
-        apiVersion: 1
-        datasources:
-        - name: Prometheus
-          type: prometheus
-          url: http://prometheus-server.${NS}.svc.cluster.local
-          access: proxy
-          isDefault: true
-    GRAFEOF
-    kubectl create configmap wideep-overview-dashboard \
-        --from-file=wideep-overview.json=dashboards/grafana-wideep-overview.json \
-        -n "$NS" --dry-run=client -o yaml \
-      | kubectl label --local -f - grafana_dashboard=1 -o yaml \
-      | kubectl apply -f -
-    kubectl create configmap aggregate-overview-dashboard \
-        --from-file=aggregate-overview.json=dashboards/grafana-aggregate.json \
-        -n "$NS" --dry-run=client -o yaml \
-      | kubectl label --local -f - grafana_dashboard=1 -o yaml \
-      | kubectl apply -f -
     just deploy
-    echo "=== Benchmark support ready in $NS ==="
+    echo "=== Benchmark runner ready in {{NAMESPACE}} ==="
 
 _manifesto-info:
     #!/usr/bin/env bash
@@ -628,6 +433,77 @@ _model-url:
     cd "{{manifesto_root}}"
     GATEWAY_SVC=$(uv run manifesto name "{{manifesto_spec}}" inference-gateway-istio --user "{{manifesto_user}}")
     printf 'http://%s:80/v1\n' "$GATEWAY_SVC"
+
+_server-metrics-args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -n "{{server_metrics_url}}" ]; then
+        printf -- '--server-metrics %s\n' "{{server_metrics_url}}"
+        exit 0
+    fi
+    URL=$(just --quiet _model-url)
+    BASE="${URL%/v1}"
+    printf -- '--server-metrics %s/metrics\n' "$BASE"
+
+_gpu-telemetry-args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -n "{{gpu_telemetry_urls}}" ]; then
+        printf -- '--gpu-telemetry %s\n' "{{gpu_telemetry_urls}}"
+        exit 0
+    fi
+    INFO=$(just --quiet _manifesto-info)
+    INSTANCE=$(printf '%s\n' "$INFO" | sed -n 's/^instance=//p')
+    URLS=$(kubectl get pod -n "{{NAMESPACE}}" \
+        -l "app.kubernetes.io/instance=${INSTANCE},llm-d.ai/role" \
+        -o jsonpath='{range .items[*]}http://{.status.podIP}:9400/metrics{" "}{end}' 2>/dev/null \
+        | xargs)
+    if [ -n "$URLS" ]; then
+        printf -- '--gpu-telemetry %s\n' "$URLS"
+    else
+        printf -- '--no-gpu-telemetry\n'
+    fi
+
+_smoke-interactivity dest concurrency:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    DEST="{{dest}}"
+    C="{{concurrency}}"
+    if [ ! -f "$DEST/profile_export_aiperf.json" ]; then
+        echo "ERROR: $DEST/profile_export_aiperf.json not found"
+        exit 1
+    fi
+    INFO=$(just --quiet _manifesto-info)
+    MODEL_LABEL=$(printf '%s\n' "$INFO" | sed -n 's/^model_label=//p')
+    RELEASE=$(printf '%s\n' "$INFO" | sed -n 's/^release=//p')
+    DECODE_GPUS=$(printf '%s\n' "$INFO" | sed -n 's/^decode_gpus=//p')
+    PREFILL_GPUS=$(printf '%s\n' "$INFO" | sed -n 's/^prefill_gpus=//p')
+    PODS=$(printf '%s\n' "$INFO" | sed -n 's/^pods=//p')
+    SPEC="{{manifesto_spec}}"
+    MODEL_DIR=$(basename "$(dirname "$SPEC")")
+    SPEC_NAME=$(basename "$SPEC" .yaml)
+    CONFIG_NAME=$(printf '%s-%s' "$MODEL_DIR" "$SPEC_NAME" | tr '[:upper:]' '[:lower:]')
+    WORK="$DEST/_interactivity"
+    RUN_DIR="$WORK/results_${CONFIG_NAME}/results_${CONFIG_NAME}_c${C}"
+    rm -rf "$WORK"
+    mkdir -p "$RUN_DIR"
+    for f in profile_export_aiperf.json profile_export_aiperf.csv profile_export.jsonl profile_export_console.txt server_metrics_export.json server_metrics_export.csv gpu_telemetry_export.jsonl dashboard.html; do
+        [ -f "$DEST/$f" ] && cp "$DEST/$f" "$RUN_DIR/$f"
+    done
+    if [ -f "rendered-manifests/${CONFIG_NAME}.yaml" ]; then
+        cp "rendered-manifests/${CONFIG_NAME}.yaml" "$WORK/results_${CONFIG_NAME}/manifest.yaml"
+    elif [ -f "$DEST/manifest.yaml" ]; then
+        cp "$DEST/manifest.yaml" "$WORK/results_${CONFIG_NAME}/manifest.yaml"
+    fi
+    [ -d "$DEST/logs" ] && cp -R "$DEST/logs" "$RUN_DIR/logs"
+    printf '%s\n' "$MODEL_LABEL" > "$WORK/results_${CONFIG_NAME}/model_label.txt"
+    printf '%s smoke\n' "$RELEASE" > "$WORK/results_${CONFIG_NAME}/config_label.txt"
+    printf '%s\n' "$CONFIG_NAME" > "$WORK/results_${CONFIG_NAME}/config_name.txt"
+    printf '%s\n' "$DECODE_GPUS" > "$WORK/results_${CONFIG_NAME}/decode_gpus.txt"
+    printf '%s\n' "$PREFILL_GPUS" > "$WORK/results_${CONFIG_NAME}/prefill_gpus.txt"
+    printf '%s\n' "$PODS" > "$WORK/results_${CONFIG_NAME}/pods.txt"
+    python3 gen_interactivity_chart.py "$WORK"
+    mv "$(dirname "$WORK")/interactivity_vs_throughput.html" "$DEST/interactivity_vs_throughput.html"
 
 start-model:
     #!/usr/bin/env bash
@@ -716,13 +592,7 @@ sweep outdir duration="900":
     echo "$PODS" > "$dir/pods.txt"
     echo "{{manifesto_spec}}" > "$dir/manifesto_spec.txt"
     (cd "{{manifesto_root}}" && uv run manifesto instance-id "{{manifesto_spec}}" --user "{{manifesto_user}}") > "$dir/manifesto_instance.txt"
-    INSTANCE=$(cat "$dir/manifesto_instance.txt")
-    kubectl get all -n "{{NAMESPACE}}" -l app.kubernetes.io/instance="$INSTANCE" -o yaml > "$dir/manifesto-resources.yaml" 2>/dev/null || true
-    kubectl get pod -n "{{NAMESPACE}}" -l llm-d.ai/role=prefill -o yaml > "$dir/prefill.yaml"
-    kubectl get pod -n "{{NAMESPACE}}" -l llm-d.ai/role=decode -o yaml > "$dir/decode.yaml"
-    kubectl get pod -n "{{NAMESPACE}}" -l app.kubernetes.io/component=epp -o yaml > "$dir/epp.yaml" 2>/dev/null || true
-    kubectl get inferencepool -n "{{NAMESPACE}}" -o yaml > "$dir/inferencepool.yaml" 2>/dev/null || true
-    kubectl get httproute -n "{{NAMESPACE}}" -o yaml > "$dir/httproute.yaml" 2>/dev/null || true
+    [ -f "rendered-manifests/${CONFIG_NAME}.yaml" ] && cp "rendered-manifests/${CONFIG_NAME}.yaml" "$dir/manifest.yaml"
     just vllm-version "$dir"
     just sweep-concurrency "$CONFIG_NAME" "$dir" {{duration}}
     just stop-model
@@ -730,24 +600,25 @@ sweep outdir duration="900":
 snapshot-prometheus ns dest:
     #!/usr/bin/env bash
     set -euo pipefail
-    PROM_POD=$(kubectl get pod -n "{{ns}}" -l app.kubernetes.io/name=prometheus,app.kubernetes.io/component=server -o jsonpath='{.items[0].metadata.name}' 2>/dev/null) || {
-        echo "  No Prometheus pod in {{ns}}, skipping snapshot"
+    PROM_NS="{{prometheus_namespace}}"
+    PROM_POD=$(kubectl get pod -n "$PROM_NS" -l app.kubernetes.io/name=prometheus,app.kubernetes.io/component=server -o jsonpath='{.items[0].metadata.name}' 2>/dev/null) || {
+        echo "  No Prometheus pod in $PROM_NS, skipping snapshot"
         exit 0
     }
-    echo "=== {{ns}}: snapshotting Prometheus TSDB ==="
-    SNAP_NAME=$(kubectl exec -n "{{ns}}" "$PROM_POD" -c prometheus-server -- \
+    echo "=== $PROM_NS: snapshotting Prometheus TSDB for {{ns}} ==="
+    SNAP_NAME=$(kubectl exec -n "$PROM_NS" "$PROM_POD" -c prometheus-server -- \
         wget -qO- --post-data= http://localhost:9090/api/v1/admin/tsdb/snapshot 2>/dev/null \
         | python3 -c "import json,sys; print(json.load(sys.stdin)['data']['name'])" 2>/dev/null) || {
-        echo "  WARNING: snapshot failed for {{ns}}, skipping"
+        echo "  WARNING: snapshot failed for $PROM_NS, skipping"
         exit 0
     }
     SNAP_DIR="{{dest}}/prometheus_snapshot"
     mkdir -p "$SNAP_DIR"
-    kubectl cp "{{ns}}/${PROM_POD}:/data/snapshots/${SNAP_NAME}" "$SNAP_DIR" -c prometheus-server 2>/dev/null || {
-        echo "  WARNING: snapshot copy failed for {{ns}}"
+    kubectl cp "$PROM_NS/${PROM_POD}:/data/snapshots/${SNAP_NAME}" "$SNAP_DIR" -c prometheus-server 2>/dev/null || {
+        echo "  WARNING: snapshot copy failed for $PROM_NS"
         exit 0
     }
-    kubectl exec -n "{{ns}}" "$PROM_POD" -c prometheus-server -- rm -rf "/data/snapshots/${SNAP_NAME}" 2>/dev/null || true
+    kubectl exec -n "$PROM_NS" "$PROM_POD" -c prometheus-server -- rm -rf "/data/snapshots/${SNAP_NAME}" 2>/dev/null || true
     echo "  Saved to $SNAP_DIR"
 
 seed_image := "quay.io/rh-ee-ecrncevi/benchmark-seed:amd64"
@@ -763,9 +634,6 @@ seed-deploy:
     kubectl apply -n {{NAMESPACE}} -f seed.yaml
     kubectl rollout status deploy/{{seed_deploy}} -n {{NAMESPACE}} --timeout=300s
     POD=$(kubectl get pod -n {{NAMESPACE}} -l app={{seed_deploy}} -o jsonpath='{.items[0].metadata.name}')
-    kubectl exec -n {{NAMESPACE}} "$POD" -- helm repo add prometheus-community https://prometheus-community.github.io/helm-charts 2>/dev/null || true
-    kubectl exec -n {{NAMESPACE}} "$POD" -- helm repo add grafana https://grafana.github.io/helm-charts 2>/dev/null || true
-    kubectl exec -n {{NAMESPACE}} "$POD" -- helm repo update
     echo "Seed pod ready: $POD"
 
 _seed-sync outdir duration:

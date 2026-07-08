@@ -11,6 +11,7 @@ in the same directory as this script (or parent of results_dir).
 """
 
 import base64
+import csv
 import json
 import os
 import re
@@ -50,6 +51,92 @@ def read_int_file(path, default):
         return int(read_text_file(path, str(default)))
     except ValueError:
         return default
+
+
+def parse_int(value):
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str):
+        value = value.strip().replace(',', '')
+        if value.isdigit():
+            return int(value)
+    return None
+
+
+def tokens_from_cache_config_labels(labels):
+    if not isinstance(labels, dict):
+        return None
+    num_gpu_blocks = parse_int(labels.get('num_gpu_blocks'))
+    block_size = parse_int(labels.get('block_size'))
+    if num_gpu_blocks is None or block_size is None:
+        return None
+    return num_gpu_blocks * block_size
+
+
+def find_kv_cache_tokens_in_json(value):
+    if isinstance(value, dict):
+        found = []
+        token_value = tokens_from_cache_config_labels(value)
+        if token_value is not None:
+            found.append(token_value)
+        for child in value.values():
+            child_value = find_kv_cache_tokens_in_json(child)
+            if child_value is not None:
+                found.append(child_value)
+        if found:
+            return max(found)
+    elif isinstance(value, list):
+        found = [v for v in (find_kv_cache_tokens_in_json(child) for child in value) if v is not None]
+        if found:
+            return max(found)
+    return None
+
+
+def read_kv_cache_tokens_from_cache_config(run_dir):
+    json_path = os.path.join(run_dir, 'server_metrics_export.json')
+    if os.path.isfile(json_path):
+        try:
+            with open(json_path) as f:
+                token_value = find_kv_cache_tokens_in_json(json.load(f))
+            if token_value is not None:
+                return token_value
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    csv_path = os.path.join(run_dir, 'server_metrics_export.csv')
+    if os.path.isfile(csv_path):
+        found = []
+        try:
+            with open(csv_path, newline='') as f:
+                reader = csv.reader(row for row in f if not row.startswith('#'))
+                current = {}
+                for row in reader:
+                    if len(row) < 4:
+                        continue
+                    if row[1] == 'vllm:cache_config_info':
+                        label_name = row[2]
+                        label_value = row[3]
+                    elif len(row) >= 5 and row[2] == 'vllm:cache_config_info':
+                        label_name = row[3]
+                        label_value = row[4]
+                    else:
+                        continue
+                    current[label_name] = label_value
+                    token_value = tokens_from_cache_config_labels(current)
+                    if token_value is not None:
+                        found.append(token_value)
+                        current = {}
+            if found:
+                return max(found)
+        except OSError:
+            pass
+    return None
+
+
+def read_kv_cache_tokens(run_dir):
+    return read_kv_cache_tokens_from_cache_config(run_dir)
 
 
 def discover_configs(results_dir):
@@ -97,20 +184,7 @@ def discover_configs(results_dir):
                     if key not in metric_units:
                         metric_units[key] = val.get('unit', '')
 
-            logs_dir = os.path.join(config_dir, sub, 'logs')
-            kv_cache_tokens = None
-            if os.path.isdir(logs_dir):
-                for lf in os.listdir(logs_dir):
-                    if 'decode' in lf and lf.endswith('.log'):
-                        lpath = os.path.join(logs_dir, lf)
-                        with open(lpath) as lfile:
-                            for line in lfile:
-                                m_kv = re.search(r'GPU KV cache size:\s*([\d,]+)\s*tokens', line)
-                                if m_kv:
-                                    kv_cache_tokens = int(m_kv.group(1).replace(',', ''))
-                                    break
-                        if kv_cache_tokens is not None:
-                            break
+            kv_cache_tokens = read_kv_cache_tokens(os.path.join(config_dir, sub))
             if kv_cache_tokens is not None:
                 run_data['_kv_cache_tokens'] = kv_cache_tokens
 
@@ -210,6 +284,94 @@ def generate_html(configs, output_path, results_dir, metric_units):
     c_labels_js = {f'c{c}': c for c in sorted_conc}
 
     metrics_js = {k: {'unit': v} for k, v in sorted(metric_units.items())}
+    x_axis_metrics = [
+        'output_token_throughput_per_user',
+        'inter_token_latency',
+        'time_to_first_token',
+        'time_to_second_token',
+        'request_latency',
+        'effective_latency',
+        'credit_to_start_latency',
+        'input_sequence_length',
+        'output_sequence_length',
+        'tokens_in_flight',
+        'effective_concurrency',
+        'effective_decode_concurrency',
+        'effective_prefill_concurrency',
+        'request_throughput',
+        'theoretical_prefix_cache_hit',
+    ]
+    y_axis_metrics = [
+        'output_token_throughput',
+        'output_token_throughput_per_user',
+        'e2e_output_token_throughput',
+        'input_token_throughput',
+        'total_token_throughput',
+        'effective_decode_throughput',
+        'effective_prefill_throughput',
+        'effective_total_throughput',
+        'active_decode_throughput',
+        'active_prefill_throughput',
+        'active_total_throughput',
+        'request_throughput',
+        'request_count',
+        'total_output_tokens',
+        'total_usage_prompt_tokens',
+        'total_usage_completion_tokens',
+        'total_usage_total_tokens',
+    ]
+    decode_normalized_metrics = [
+        'output_token_throughput',
+        'e2e_output_token_throughput',
+        'effective_decode_throughput',
+        'active_decode_throughput',
+    ]
+    prefill_normalized_metrics = [
+        'input_token_throughput',
+        'effective_prefill_throughput',
+        'active_prefill_throughput',
+    ]
+    total_normalized_metrics = [
+        'total_token_throughput',
+        'effective_total_throughput',
+        'active_total_throughput',
+    ]
+    metric_labels = {
+        'active_decode_throughput': 'Active decode throughput',
+        'active_decode_throughput_per_user': 'Active decode throughput/user',
+        'active_prefill_throughput': 'Active prefill throughput',
+        'active_prefill_throughput_per_user': 'Active prefill throughput/user',
+        'active_total_throughput': 'Active total throughput',
+        'credit_to_start_latency': 'Credit-to-start latency',
+        'e2e_output_token_throughput': 'E2E output token throughput',
+        'effective_concurrency': 'Effective concurrency',
+        'effective_decode_concurrency': 'Effective decode concurrency',
+        'effective_decode_throughput': 'Effective decode throughput',
+        'effective_decode_throughput_per_user': 'Effective decode throughput/user',
+        'effective_latency': 'Effective latency',
+        'effective_prefill_concurrency': 'Effective prefill concurrency',
+        'effective_prefill_throughput': 'Effective prefill throughput',
+        'effective_prefill_throughput_per_user': 'Effective prefill throughput/user',
+        'effective_total_throughput': 'Effective total throughput',
+        'input_sequence_length': 'Input sequence length',
+        'input_token_throughput': 'Input token throughput',
+        'inter_token_latency': 'Inter-token latency',
+        'output_sequence_length': 'Output sequence length',
+        'output_token_throughput': 'Output token throughput',
+        'output_token_throughput_per_user': 'Output token throughput/user',
+        'request_count': 'Request count',
+        'request_latency': 'Request latency',
+        'request_throughput': 'Request throughput',
+        'theoretical_prefix_cache_hit': 'Theoretical prefix cache hit',
+        'time_to_first_token': 'Time to first token',
+        'time_to_second_token': 'Time to second token',
+        'tokens_in_flight': 'Tokens in flight',
+        'total_output_tokens': 'Total output tokens',
+        'total_token_throughput': 'Total token throughput',
+        'total_usage_completion_tokens': 'Total completion tokens',
+        'total_usage_prompt_tokens': 'Total prompt tokens',
+        'total_usage_total_tokens': 'Total tokens',
+    }
 
     versions = set(meta['version'] for meta in configs.values() if meta['version'])
     version_str = ', '.join(sorted(versions)) if versions else 'unknown'
@@ -355,6 +517,12 @@ const C_LABELS = {json.dumps(c_labels_js)};
 const DATA = {json.dumps(data_js)};
 const DASHBOARDS = {json.dumps(embedded_dashboards)};
 const METRICS = {json.dumps(metrics_js)};
+const X_AXIS_METRICS = {json.dumps(x_axis_metrics)};
+const Y_AXIS_METRICS = {json.dumps(y_axis_metrics)};
+const DECODE_NORMALIZED_METRICS = new Set({json.dumps(decode_normalized_metrics)});
+const PREFILL_NORMALIZED_METRICS = new Set({json.dumps(prefill_normalized_metrics)});
+const TOTAL_NORMALIZED_METRICS = new Set({json.dumps(total_normalized_metrics)});
+const METRIC_LABELS = {json.dumps(metric_labels)};
 const STAT_KEYS = {json.dumps(STAT_KEYS)};
 const CONFIG_KEYS = Object.keys(CONFIGS);
 
@@ -472,34 +640,86 @@ function makePanel(parent, title, cls) {{
 
 // ── Chart factory ──
 function metricLabel(key) {{
-  return key.replace(/_/g, ' ');
+  return METRIC_LABELS[key] || key.replace(/_/g, ' ');
 }}
-
-const NORM_MODES = [
-  {{ value: 'none', text: 'none' }},
-  {{ value: 'decode', text: '/ decode GPUs' }},
-  {{ value: 'total', text: '/ total GPUs' }},
-  {{ value: 'cost_decode', text: '$/M tok (decode GPUs)' }},
-  {{ value: 'cost_total', text: '$/M tok (total GPUs)' }},
-];
 
 let gpuCostPerHour = 0;
 
 function applyNorm(val, norm, meta) {{
-  if (val == null || val === 0) return null;
+  if (val == null) return null;
+  if (norm.startsWith('cost') && (val <= 0 || gpuCostPerHour <= 0)) return null;
+  if (val === 0) return null;
   if (norm === 'decode') return val / meta.decodeGPUs;
+  if (norm === 'prefill') return val / meta.prefillGPUs;
   if (norm === 'total') return val / (meta.decodeGPUs + meta.prefillGPUs);
   if (norm === 'cost_decode') return (meta.decodeGPUs * gpuCostPerHour * 1e6) / (val * 3600);
+  if (norm === 'cost_prefill') return (meta.prefillGPUs * gpuCostPerHour * 1e6) / (val * 3600);
   if (norm === 'cost_total') return ((meta.decodeGPUs + meta.prefillGPUs) * gpuCostPerHour * 1e6) / (val * 3600);
   return val;
 }}
 
 function normSuffix(norm) {{
   if (norm === 'decode') return ' / decode GPU';
+  if (norm === 'prefill') return ' / prefill GPU';
   if (norm === 'total') return ' / total GPU';
   if (norm === 'cost_decode') return ' ($/M tokens, decode)';
+  if (norm === 'cost_prefill') return ' ($/M tokens, prefill)';
   if (norm === 'cost_total') return ' ($/M tokens, total)';
   return '';
+}}
+
+function metricOptions(keys) {{
+  return keys.filter(k => METRICS[k]).map(k => ({{
+    value: k, text: metricLabel(k) + (METRICS[k].unit ? ` (${{METRICS[k].unit}})` : '')
+  }}));
+}}
+
+function metricSample(metric) {{
+  for (const cfg of CONFIG_KEYS) {{
+    for (const c of CONCURRENCIES) {{
+      const sample = DATA[cfg]?.[c]?.[metric];
+      if (sample) return sample;
+    }}
+  }}
+  return null;
+}}
+
+function statOptionsForMetric(metric) {{
+  const sample = metricSample(metric);
+  const keys = sample ? STAT_KEYS.filter(s => Object.prototype.hasOwnProperty.call(sample, s)) : ['avg'];
+  return (keys.length ? keys : ['avg']).map(s => ({{ value: s, text: s }}));
+}}
+
+function normOptionsForMetric(metric, axis) {{
+  const opts = [{{ value: 'none', text: 'none' }}];
+  if (DECODE_NORMALIZED_METRICS.has(metric)) {{
+    opts.push({{ value: 'decode', text: '/ decode GPUs' }});
+    opts.push({{ value: 'total', text: '/ total GPUs' }});
+    if (axis === 'y') opts.push({{ value: 'cost_decode', text: '$/M tok (decode GPUs)' }});
+  }}
+  if (PREFILL_NORMALIZED_METRICS.has(metric)) {{
+    opts.push({{ value: 'prefill', text: '/ prefill GPUs' }});
+    opts.push({{ value: 'total', text: '/ total GPUs' }});
+    if (axis === 'y') opts.push({{ value: 'cost_prefill', text: '$/M tok (prefill GPUs)' }});
+  }}
+  if (TOTAL_NORMALIZED_METRICS.has(metric)) {{
+    opts.push({{ value: 'total', text: '/ total GPUs' }});
+    if (axis === 'y') opts.push({{ value: 'cost_total', text: '$/M tok (total GPUs)' }});
+  }}
+  return opts;
+}}
+
+function setSelectOptions(sel, options, value) {{
+  sel.replaceChildren();
+  options.forEach(o => {{
+    const opt = document.createElement('option');
+    opt.value = o.value;
+    opt.textContent = o.text;
+    sel.appendChild(opt);
+  }});
+  const values = new Set(options.map(o => o.value));
+  sel.value = values.has(value) ? value : options[0]?.value;
+  return sel.value;
 }}
 
 function hoverText(cfg, c, d) {{
@@ -550,10 +770,8 @@ function createChart(container, defaults) {{
     return sel;
   }}
 
-  const metricOpts = Object.keys(METRICS).sort().map(k => ({{
-    value: k, text: metricLabel(k) + (METRICS[k].unit ? ` (${{METRICS[k].unit}})` : '')
-  }}));
-  const statOpts = STAT_KEYS.map(s => ({{ value: s, text: s }}));
+  const xMetricOpts = metricOptions(X_AXIS_METRICS);
+  const yMetricOpts = metricOptions(Y_AXIS_METRICS);
 
   // X row
   const xDiv = document.createElement('div');
@@ -576,17 +794,33 @@ function createChart(container, defaults) {{
     return sel;
   }}
 
-  mkSelIn(xDiv, 'X:', metricOpts, state.xMetric, v => {{ state.xMetric = v; update(); }});
-  mkSelIn(xDiv, 'stat:', statOpts, state.xStat, v => {{ state.xStat = v; update(); }});
-  mkSelIn(xDiv, 'norm:', NORM_MODES, state.xNorm, v => {{ state.xNorm = v; update(); }});
+  const xMetricSel = mkSelIn(xDiv, 'X:', xMetricOpts, state.xMetric, v => {{
+    state.xMetric = v;
+    state.xStat = setSelectOptions(xStatSel, statOptionsForMetric(v), state.xStat);
+    state.xNorm = setSelectOptions(xNormSel, normOptionsForMetric(v, 'x'), state.xNorm);
+    update();
+  }});
+  const xStatSel = mkSelIn(xDiv, 'stat:', statOptionsForMetric(state.xMetric), state.xStat, v => {{ state.xStat = v; update(); }});
+  const xNormSel = mkSelIn(xDiv, 'norm:', normOptionsForMetric(state.xMetric, 'x'), state.xNorm, v => {{ state.xNorm = v; update(); }});
+  state.xMetric = xMetricSel.value;
+  state.xStat = xStatSel.value;
+  state.xNorm = xNormSel.value;
   container.appendChild(xDiv);
 
   // Y row
   const yDiv = document.createElement('div');
   yDiv.className = 'axis-controls';
-  mkSelIn(yDiv, 'Y:', metricOpts, state.yMetric, v => {{ state.yMetric = v; update(); }});
-  mkSelIn(yDiv, 'stat:', statOpts, state.yStat, v => {{ state.yStat = v; update(); }});
-  mkSelIn(yDiv, 'norm:', NORM_MODES, state.yNorm, v => {{ state.yNorm = v; update(); }});
+  const yMetricSel = mkSelIn(yDiv, 'Y:', yMetricOpts, state.yMetric, v => {{
+    state.yMetric = v;
+    state.yStat = setSelectOptions(yStatSel, statOptionsForMetric(v), state.yStat);
+    state.yNorm = setSelectOptions(yNormSel, normOptionsForMetric(v, 'y'), state.yNorm);
+    update();
+  }});
+  const yStatSel = mkSelIn(yDiv, 'stat:', statOptionsForMetric(state.yMetric), state.yStat, v => {{ state.yStat = v; update(); }});
+  const yNormSel = mkSelIn(yDiv, 'norm:', normOptionsForMetric(state.yMetric, 'y'), state.yNorm, v => {{ state.yNorm = v; update(); }});
+  state.yMetric = yMetricSel.value;
+  state.yStat = yStatSel.value;
+  state.yNorm = yNormSel.value;
   container.appendChild(yDiv);
 
   // Panel
@@ -605,6 +839,7 @@ function createChart(container, defaults) {{
     const unit = METRICS[metric]?.unit || '';
     const ss = stat === 'avg' ? '' : ` (${{stat}})`;
     const ns = normSuffix(norm);
+    if (norm.startsWith('cost')) return `${{name}}${{ss}}${{ns}}`;
     return `${{name}}${{ss}}${{ns}} (${{unit}})`;
   }}
 
@@ -635,11 +870,13 @@ function createChart(container, defaults) {{
   }}
 
   function getLayout() {{
+    const yAxis = {{ ...LAYOUT_DEFAULTS.yaxis, title: {{ text: axisTitle(state.yMetric, state.yStat, state.yNorm), font: {{ size: 11 }} }} }};
+    if (!state.yNorm.startsWith('cost')) yAxis.rangemode = 'tozero';
     return {{
       ...LAYOUT_DEFAULTS,
       title: {{ text: `${{metricLabel(state.yMetric)}} vs ${{metricLabel(state.xMetric)}}`, font: {{ size: 13, color: '#d8d9da' }} }},
       xaxis: {{ ...LAYOUT_DEFAULTS.xaxis, title: {{ text: axisTitle(state.xMetric, state.xStat, state.xNorm), font: {{ size: 11 }} }} }},
-      yaxis: {{ ...LAYOUT_DEFAULTS.yaxis, title: {{ text: axisTitle(state.yMetric, state.yStat, state.yNorm), font: {{ size: 11 }} }}, rangemode: 'tozero' }},
+      yaxis: yAxis,
       legend: {{ ...LAYOUT_DEFAULTS.legend, x: 0.99, y: 0.99, xanchor: 'right', yanchor: 'top' }},
     }};
   }}
@@ -707,8 +944,8 @@ const costInput = document.createElement('input');
 costInput.type = 'number';
 costInput.step = '0.01';
 costInput.min = '0';
-costInput.value = '0';
-costInput.placeholder = '0.00';
+costInput.value = '21.68';
+costInput.placeholder = '21.68';
 costInput.style.cssText = 'background:#181b1f; color:#d8d9da; border:1px solid #2a2a2e; border-radius:4px; padding:4px 8px; font-size:12px; width:80px; font-family:inherit;';
 costInput.addEventListener('input', () => {{
   gpuCostPerHour = (parseFloat(costInput.value) || 0) / {GPUS_PER_NODE};
@@ -716,7 +953,7 @@ costInput.addEventListener('input', () => {{
     if (ch.state.xNorm.startsWith('cost') || ch.state.yNorm.startsWith('cost')) ch.update();
   }});
 }});
-gpuCostPerHour = 0;
+gpuCostPerHour = (parseFloat(costInput.value) || 0) / {GPUS_PER_NODE};
 costWrap.appendChild(costInput);
 root.appendChild(costWrap);
 

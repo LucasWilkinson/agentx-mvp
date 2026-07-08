@@ -13,14 +13,24 @@ AIPerf AgentX-MVP benchmark harness for llm-d/manifesto deployments with prefill
   MANIFESTO_CLUSTER=clusters/oci-gb200.yaml
   MANIFESTO_USER=$USER
   ```
-- Grafana port-forwarded to `localhost:3001` (for dashboard export)
+- Model and monitoring resources deployed by `llm-manifesto`
 
 Defaults target `deepseek-ai/DeepSeek-V4-Pro` on the smallest GB200/NVL72 manifesto profile and use only the existing `vllm` namespace.
+
+For report/dashboard collection, the harness reads Grafana and Prometheus from:
+
+```bash
+MONITORING_NAMESPACE=vllm
+PROMETHEUS_NAMESPACE=$MONITORING_NAMESPACE
+GRAFANA_NAMESPACE=$MONITORING_NAMESPACE
+```
+
+Override these only when manifesto installs the monitoring stack somewhere else.
 
 ## Quick start
 
 ```bash
-just setup           # configure monitoring and deploy the aiperf runner
+just setup           # deploy the aiperf runner
 just check           # verify the model endpoint is reachable
 just run             # run benchmark (default: concurrency=64, duration=900s)
 just run 16 900      # override concurrency / duration
@@ -52,9 +62,10 @@ just sweep results_deepseekv4_nvl72 1200
 Each sweep produces result directories like `results_$USER-wide-ep-1p-ep8-1d-ep8/results_$USER-wide-ep-1p-ep8-1d-ep8_c1/`, `results_$USER-wide-ep-1p-ep8-1d-ep8/results_$USER-wide-ep-1p-ep8-1d-ep8_c16/`, etc. Each run directory contains:
 - `profile_export_aiperf.json` — benchmark metrics
 - `profile_export.jsonl` — per-request data
-- `prefill.yaml` / `decode.yaml` — pod specs at time of run
 - `vllm_image.txt` — vLLM container image tag
 - `vllm_fingerprint.txt` — vLLM `system_fingerprint` from the API
+
+The parent config directory contains `manifest.yaml`, the monolithic rendered manifesto manifest used for the run.
 
 ## Grafana dashboard export
 
