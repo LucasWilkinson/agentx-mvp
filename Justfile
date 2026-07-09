@@ -563,6 +563,7 @@ start-model:
         | kubectl apply -n "{{NAMESPACE}}" -f -
     MANIFESTO_NAMESPACE="{{NAMESPACE}}" MANIFESTO_CLUSTER="{{manifesto_cluster}}" USER="{{manifesto_user}}" \
         just ready "{{manifesto_spec}}"
+    cd "{{repo_root}}"
     just clear-kv-cache
 
 stop-model:
