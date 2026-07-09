@@ -162,7 +162,7 @@ _run-job concurrency duration dest unsafe_args:
                 - |-
                   set -euo pipefail
                   mkdir -p "\$ARTIFACT_DIR/logs"
-                  aiperf profile \
+                  /opt/venv/bin/aiperf profile \
                     --scenario inferencex-agentx-mvp \
                     \$UNSAFE_ARGS \
                     --url "\$URL" \
