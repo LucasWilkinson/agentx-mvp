@@ -580,7 +580,7 @@ sweep-concurrency config_name dest="." duration="900":
     #!/usr/bin/env bash
     set -uo pipefail
     FAILED=""
-    for C in 1 16 64 256; do
+    for C in 16 64 256; do
         RDIR="{{dest}}/results_{{config_name}}_c${C}"
         if [ -f "$RDIR/profile_export_aiperf.json" ]; then
             echo "=== concurrency=$C already exists, skipping ==="
