@@ -1,5 +1,8 @@
 FROM alpine:3.20
 
+ARG MANIFESTO_REPO=https://github.com/tlrmchlsmth/llm-manifesto.git
+ARG MANIFESTO_REF=main
+
 RUN apk add --no-cache \
     bash coreutils findutils grep tar curl git \
     python3 \
@@ -27,4 +30,18 @@ ENV VIRTUAL_ENV=/opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 WORKDIR /workspace
+
+COPY . /workspace/agentx-mvp
+
+RUN git clone --depth 1 --branch "${MANIFESTO_REF}" "${MANIFESTO_REPO}" /workspace/llm-manifesto \
+    && rm -rf \
+      /workspace/agentx-mvp/.git \
+      /workspace/agentx-mvp/.venv \
+      /workspace/agentx-mvp/.pytest_cache \
+      /workspace/agentx-mvp/__pycache__ \
+      /workspace/llm-manifesto/.git \
+      /workspace/llm-manifesto/.venv \
+      /workspace/llm-manifesto/.pytest_cache \
+      /workspace/llm-manifesto/__pycache__
+
 CMD ["sleep", "infinity"]

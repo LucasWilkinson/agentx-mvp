@@ -45,6 +45,10 @@ just shell           # shell into the orchestrator
 just clean           # delete benchmark jobs and the orchestrator pod
 ```
 
+The orchestrator image contains this harness at `/workspace/agentx-mvp` and
+`llm-manifesto` at `/workspace/llm-manifesto`; `just orchestrator-run` does not
+copy source trees into the pod. Build it with `just orchestrator-build`.
+
 ## Model Deployment
 
 ```bash

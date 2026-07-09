@@ -55,7 +55,7 @@ spec:
                       - amd64
       containers:
         - name: orchestrator
-          image: quay.io/rh-ee-ecrncevi/benchmark-seed:amd64
+          image: quay.io/tms/benchmark-orchestrator:amd64
           imagePullPolicy: Always
           command: ["sleep", "infinity"]
           workingDir: /workspace
@@ -67,10 +67,3 @@ spec:
               cpu: "4"
               memory: 8Gi
               ephemeral-storage: 10Gi
-          volumeMounts:
-            - name: workspace
-              mountPath: /workspace
-      volumes:
-        - name: workspace
-          emptyDir:
-            sizeLimit: 10Gi

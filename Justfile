@@ -26,7 +26,9 @@ aiperf_image := env_var_or_default('AIPERF_IMAGE', 'quay.io/rh-ee-robshaw/aiperf
 lustre_claim := env_var_or_default('LUSTRE_CLAIM', 'lustre-pvc-vllm')
 lustre_mount := env_var_or_default('LUSTRE_MOUNT', '/mnt/lustre')
 lustre_prefix := env_var_or_default('LUSTRE_PREFIX', '/mnt/lustre/agentx-mvp')
-orchestrator_image := env_var_or_default('ORCHESTRATOR_IMAGE', 'quay.io/rh-ee-ecrncevi/benchmark-seed:amd64')
+orchestrator_image := env_var_or_default('ORCHESTRATOR_IMAGE', 'quay.io/tms/benchmark-orchestrator:amd64')
+orchestrator_manifesto_repo := env_var_or_default('ORCHESTRATOR_MANIFESTO_REPO', 'https://github.com/tlrmchlsmth/llm-manifesto.git')
+orchestrator_manifesto_ref := env_var_or_default('ORCHESTRATOR_MANIFESTO_REF', 'main')
 orchestrator_deploy := "benchmark-orchestrator"
 model     := env_var_or_default('MODEL', 'deepseek-ai/DeepSeek-V4-Pro')
 model_label := env_var_or_default('MODEL_LABEL', 'DeepSeek-V4-Pro')
@@ -672,56 +674,41 @@ snapshot-prometheus ns dest:
     echo "  Saved to $SNAP_DIR"
 
 orchestrator-build:
-    podman build --platform linux/amd64 -f Dockerfile.orchestrator -t {{orchestrator_image}} .
+    podman build --platform linux/amd64 \
+      --build-arg MANIFESTO_REPO="{{orchestrator_manifesto_repo}}" \
+      --build-arg MANIFESTO_REF="{{orchestrator_manifesto_ref}}" \
+      -f Dockerfile.orchestrator -t {{orchestrator_image}} .
     podman push {{orchestrator_image}}
 
 orchestrator-deploy:
     #!/usr/bin/env bash
     set -euo pipefail
     kubectl apply -n {{NAMESPACE}} -f orchestrator.yaml
+    kubectl set image -n {{NAMESPACE}} deploy/{{orchestrator_deploy}} orchestrator={{orchestrator_image}}
+    kubectl rollout restart -n {{NAMESPACE}} deploy/{{orchestrator_deploy}}
     kubectl rollout status deploy/{{orchestrator_deploy}} -n {{NAMESPACE}} --timeout=300s
     POD=$(kubectl get pod -n {{NAMESPACE}} -l app={{orchestrator_deploy}} -o jsonpath='{.items[0].metadata.name}')
     echo "Orchestrator pod ready: $POD"
-
-_orchestrator-sync outdir duration:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    NS={{NAMESPACE}}
-    POD=$(kubectl get pod -n "$NS" -l app={{orchestrator_deploy}} -o jsonpath='{.items[0].metadata.name}')
-    kubectl exec -n "$NS" "$POD" -- mkdir -p /workspace/agentx-mvp /workspace/agentx-mvp/dashboards
-    for f in Justfile dashboard.json extract_timestamps.py export_dashboard.py gen_interactivity_chart.py inject_kueue_queue.py overlay_dashboards.py; do
-        [ -f "$f" ] && kubectl cp "$f" "$NS/${POD}:/workspace/agentx-mvp/$f"
-    done
-    kubectl exec -n "$NS" "$POD" -- mkdir -p /workspace/agentx-mvp/kueue
-    for f in kueue/*.yaml; do
-        kubectl cp "$f" "$NS/${POD}:/workspace/agentx-mvp/$f"
-    done
-    for f in dashboards/*.json; do
-        kubectl cp "$f" "$NS/${POD}:/workspace/agentx-mvp/$f"
-    done
-    kubectl exec -n "$NS" "$POD" -- rm -rf /workspace/llm-manifesto
-    kubectl exec -n "$NS" "$POD" -- mkdir -p /workspace/llm-manifesto
-    tar --exclude=.git --exclude=.venv --exclude=__pycache__ --exclude=.pytest_cache -C "{{manifesto_root}}" -cf - . \
-      | kubectl exec -i -n "$NS" "$POD" -- tar -xf - -C /workspace/llm-manifesto
-    TMPENV=$(mktemp)
-    trap "rm -f $TMPENV" EXIT
-    printf 'NAMESPACE=%s\nMODEL_SPEC=%s\nMANIFESTO_ROOT=/workspace/llm-manifesto\nMANIFESTO_CLUSTER=%s\nMANIFESTO_USER=%s\nMANIFESTO_ARGS=%s\nKUEUE_QUEUE=%s\nMAX_CONTEXT_LENGTH=%s\n' \
-      "{{NAMESPACE}}" "{{manifesto_spec}}" "{{manifesto_cluster}}" "{{manifesto_user}}" "{{manifesto_args}}" "{{kueue_queue}}" "{{max_context_length}}" > "$TMPENV"
-    kubectl cp "$TMPENV" "$NS/${POD}:/workspace/agentx-mvp/.env"
 
 orchestrator-run outdir duration="900":
     #!/usr/bin/env bash
     set -euo pipefail
     just orchestrator-deploy
-    just _orchestrator-sync "{{outdir}}" "{{duration}}"
     NS={{NAMESPACE}}
     POD=$(kubectl get pod -n "$NS" -l app={{orchestrator_deploy}} -o jsonpath='{.items[0].metadata.name}')
-    TMPSCRIPT=$(mktemp)
-    printf '#!/bin/bash\nset -euo pipefail\ncd /workspace/agentx-mvp\njust sweep %s %s > /workspace/orchestrator-sweep.log 2>&1\necho $? > /workspace/orchestrator-sweep.exit_code\nrm -f /workspace/orchestrator-sweep.pid\n' "{{outdir}}" "{{duration}}" > "$TMPSCRIPT"
-    kubectl cp "$TMPSCRIPT" "$NS/${POD}:/workspace/run_orchestrator.sh"
-    rm -f "$TMPSCRIPT"
-    kubectl exec -n "$NS" "$POD" -- chmod +x /workspace/run_orchestrator.sh
-    kubectl exec -n "$NS" "$POD" -- bash -c 'nohup bash /workspace/run_orchestrator.sh </dev/null >/dev/null 2>&1 & echo $! > /workspace/orchestrator-sweep.pid && echo "Launched PID $!"'
+    kubectl exec -n "$NS" "$POD" -- env \
+      JUST_NO_DOTENV=true \
+      NAMESPACE="{{NAMESPACE}}" \
+      MODEL_SPEC="{{manifesto_spec}}" \
+      MANIFESTO_ROOT="/workspace/llm-manifesto" \
+      MANIFESTO_CLUSTER="{{manifesto_cluster}}" \
+      MANIFESTO_USER="{{manifesto_user}}" \
+      MANIFESTO_ARGS="{{manifesto_args}}" \
+      KUEUE_QUEUE="{{kueue_queue}}" \
+      MAX_CONTEXT_LENGTH="{{max_context_length}}" \
+      SWEEP_OUTDIR="{{outdir}}" \
+      SWEEP_DURATION="{{duration}}" \
+      bash -lc 'cd /workspace/agentx-mvp; rm -f /workspace/orchestrator-sweep.exit_code; : > /workspace/orchestrator-sweep.log; nohup bash -lc '"'"'just sweep "$SWEEP_OUTDIR" "$SWEEP_DURATION" > /workspace/orchestrator-sweep.log 2>&1; code=$?; echo "$code" > /workspace/orchestrator-sweep.exit_code; rm -f /workspace/orchestrator-sweep.pid; exit "$code"'"'"' </dev/null >/dev/null 2>&1 & pid=$!; echo "$pid" > /workspace/orchestrator-sweep.pid; echo "Launched PID $pid"'
     echo "Sweep running detached. Monitor: just orchestrator-logs"
 
 orchestrator-logs:
