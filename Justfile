@@ -59,6 +59,7 @@ check:
     NAME="agentx-check-$(date -u +%Y%m%d%H%M%S)"
     kubectl run "$NAME" -n {{NAMESPACE}} --rm -i --restart=Never \
       --image={{orchestrator_image}} \
+      --overrides='{"spec":{"nodeSelector":{"kubernetes.io/arch":"amd64"}}}' \
       --env="URL=$URL" \
       --command -- python3 -c "import os, urllib.request as u; print(u.urlopen(os.environ['URL'] + '/models', timeout=10).read().decode())"
 
@@ -74,6 +75,7 @@ warmup:
         NAME="agentx-warmup-$(date -u +%Y%m%d%H%M%S)-${attempt}"
         if kubectl run "$NAME" -n {{NAMESPACE}} --rm -i --restart=Never \
           --image={{orchestrator_image}} \
+          --overrides='{"spec":{"nodeSelector":{"kubernetes.io/arch":"amd64"}}}' \
           --env="URL=$URL" \
           --env="MODEL={{model}}" \
           --command -- python3 -c "
