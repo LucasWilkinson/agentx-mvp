@@ -33,7 +33,9 @@ WORKDIR /workspace
 
 COPY . /workspace/agentx-mvp
 
-RUN git clone --depth 1 --branch "${MANIFESTO_REF}" "${MANIFESTO_REPO}" /workspace/llm-manifesto \
+RUN git clone --depth 1 "${MANIFESTO_REPO}" /workspace/llm-manifesto \
+    && git -C /workspace/llm-manifesto fetch --depth 1 origin "${MANIFESTO_REF}" \
+    && git -C /workspace/llm-manifesto checkout FETCH_HEAD \
     && rm -rf \
       /workspace/agentx-mvp/.git \
       /workspace/agentx-mvp/.venv \
