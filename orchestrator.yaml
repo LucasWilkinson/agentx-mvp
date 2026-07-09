@@ -27,20 +27,20 @@ subjects:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: benchmark-seed
+  name: benchmark-orchestrator
   labels:
-    app: benchmark-seed
+    app: benchmark-orchestrator
 spec:
   replicas: 1
   strategy:
     type: Recreate
   selector:
     matchLabels:
-      app: benchmark-seed
+      app: benchmark-orchestrator
   template:
     metadata:
       labels:
-        app: benchmark-seed
+        app: benchmark-orchestrator
     spec:
       serviceAccountName: benchmark-orchestrator
       restartPolicy: Always
@@ -54,7 +54,7 @@ spec:
                     values:
                       - amd64
       containers:
-        - name: seed
+        - name: orchestrator
           image: quay.io/rh-ee-ecrncevi/benchmark-seed:amd64
           imagePullPolicy: Always
           command: ["sleep", "infinity"]
