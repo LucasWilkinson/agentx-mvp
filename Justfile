@@ -37,6 +37,7 @@ url       := env_var_or_default('URL', '')
 server_metrics_url := env_var_or_default('SERVER_METRICS_URL', '')
 gpu_telemetry_urls := env_var_or_default('GPU_TELEMETRY_URLS', '')
 benchmark_retries := env_var_or_default('BENCHMARK_RETRIES', '3')
+pod_start_timeout := env_var_or_default('POD_START_TIMEOUT', '900')
 monitoring_namespace := env_var_or_default('MONITORING_NAMESPACE', NAMESPACE)
 prometheus_namespace := env_var_or_default('PROMETHEUS_NAMESPACE', monitoring_namespace)
 prometheus_service := env_var_or_default('PROMETHEUS_SERVICE', 'prometheus-server')
@@ -210,12 +211,52 @@ _run-job concurrency duration dest unsafe_args:
     kubectl apply -n "$NS" -f "$TMP"
     echo "Benchmark job submitted: $JOB"
     echo "Artifacts: $ARTIFACT_DIR"
+    echo "Waiting for benchmark pod..."
+    POD=""
+    while [ -z "$POD" ]; do
+        POD=$(kubectl get pod -n "$NS" -l job-name="$JOB" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+        if [ -z "$POD" ]; then
+            sleep 5
+        fi
+    done
+    echo "Benchmark pod created: $POD"
+    POD_START_DEADLINE=$((SECONDS + {{pod_start_timeout}}))
+    LAST_STATUS=""
+    while true; do
+        PHASE=$(kubectl get pod -n "$NS" "$POD" -o jsonpath='{.status.phase}' 2>/dev/null || true)
+        REASON=$(kubectl get pod -n "$NS" "$POD" -o jsonpath='{.status.containerStatuses[0].state.waiting.reason}' 2>/dev/null || true)
+        STATUS="$PHASE"
+        if [ -n "$REASON" ]; then
+            STATUS="$STATUS/$REASON"
+        fi
+        if [ "$STATUS" != "$LAST_STATUS" ]; then
+            echo "Benchmark pod status: $STATUS"
+            LAST_STATUS="$STATUS"
+        fi
+        case "$PHASE" in
+            Running|Succeeded)
+                break
+                ;;
+            Failed)
+                kubectl logs -n "$NS" "$POD" --all-containers --tail=200 || true
+                kubectl describe -n "$NS" "pod/$POD" || true
+                exit 1
+                ;;
+        esac
+        if [ "$SECONDS" -ge "$POD_START_DEADLINE" ]; then
+            echo "ERROR: benchmark pod did not start within {{pod_start_timeout}}s"
+            kubectl logs -n "$NS" "$POD" --all-containers --tail=200 || true
+            kubectl describe -n "$NS" "pod/$POD" || true
+            kubectl describe -n "$NS" "job/$JOB" || true
+            exit 1
+        fi
+        sleep 10
+    done
     kubectl wait -n "$NS" --for=condition=Complete "job/$JOB" --timeout="${TIMEOUT}s" || {
         kubectl logs -n "$NS" "job/$JOB" --all-containers --tail=200 || true
         kubectl describe -n "$NS" "job/$JOB" || true
         exit 1
     }
-    POD=$(kubectl get pod -n "$NS" -l job-name="$JOB" -o jsonpath='{.items[0].metadata.name}')
     mkdir -p "{{dest}}/logs"
     kubectl cp "$NS/${POD}:${ARTIFACT_DIR}/." "{{dest}}" 2>/dev/null || true
     printf '%s\n' "$JOB" > "{{dest}}/job_name.txt"
