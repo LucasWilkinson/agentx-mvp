@@ -297,7 +297,8 @@ _run-job concurrency duration dest unsafe_args attempt:
         fi
         sleep 10
     done
-    PVC_POD=$(kubectl get pod -n "$NS" -l llm-d.ai/role=prefill -o jsonpath='{.items[0].metadata.name}')
+    SELECTOR=$(just --quiet _pod-selector prefill)
+    PVC_POD=$(kubectl get pod -n "$NS" -l "$SELECTOR" -o jsonpath='{.items[0].metadata.name}')
     kubectl exec -n "$NS" "$PVC_POD" -c vllm -- test -f "${CANONICAL_ARTIFACT_DIR}/profile_export_aiperf.json" || {
         echo "ERROR: profile_export_aiperf.json missing from canonical PVC path after job completion"
         kubectl exec -n "$NS" "$PVC_POD" -c vllm -- find "$CANONICAL_ARTIFACT_DIR" -maxdepth 2 -type f 2>/dev/null || true
@@ -347,10 +348,12 @@ drain:
     #!/usr/bin/env bash
     set -euo pipefail
     NS={{NAMESPACE}}
+    PREFILL_SELECTOR=$(just --quiet _pod-selector prefill)
+    DECODE_SELECTOR=$(just --quiet _pod-selector decode)
     echo "Waiting for all requests to drain..."
     while true; do
         TOTAL=0
-        for pod in $(kubectl get pods -n "$NS" -l llm-d.ai/role=prefill -o jsonpath='{.items[*].metadata.name}'); do
+        for pod in $(kubectl get pods -n "$NS" -l "$PREFILL_SELECTOR" -o jsonpath='{.items[*].metadata.name}'); do
             for port in 8000 8001 8002 8003 8004 8005 8006 8007; do
                 N=$(kubectl exec -n "$NS" "$pod" -c vllm -- \
                     curl -sf "http://localhost:${port}/metrics" 2>/dev/null \
@@ -358,7 +361,7 @@ drain:
                 TOTAL=$((TOTAL + N))
             done
         done
-        for pod in $(kubectl get pods -n "$NS" -l llm-d.ai/role=decode -o jsonpath='{.items[*].metadata.name}'); do
+        for pod in $(kubectl get pods -n "$NS" -l "$DECODE_SELECTOR" -o jsonpath='{.items[*].metadata.name}'); do
             for port in 8200 8201 8202 8203 8204 8205 8206 8207; do
                 N=$(kubectl exec -n "$NS" "$pod" -c vllm -- \
                     curl -sf "http://localhost:${port}/metrics" 2>/dev/null \
@@ -379,15 +382,18 @@ clear-kv-cache:
     #!/usr/bin/env bash
     set -euo pipefail
     NS={{NAMESPACE}}
+    PREFILL_SELECTOR=$(just --quiet _pod-selector prefill)
+    DECODE_SELECTOR=$(just --quiet _pod-selector decode)
+    ALL_WORKER_SELECTOR=$(just --quiet _pod-selector)
     # Reset vLLM prefix cache (GPU + CPU tiers) via API
-    for pod in $(kubectl get pods -n "$NS" -l llm-d.ai/role=prefill -o jsonpath='{.items[*].metadata.name}'); do
+    for pod in $(kubectl get pods -n "$NS" -l "$PREFILL_SELECTOR" -o jsonpath='{.items[*].metadata.name}'); do
         echo "Resetting prefix cache on prefill $pod..."
         for port in 8000 8001 8002 8003 8004 8005 8006 8007; do
             kubectl exec -n "$NS" "$pod" -c vllm -- \
                 curl -sf -X POST "http://localhost:${port}/reset_prefix_cache?reset_external=true" 2>/dev/null || true
         done
     done
-    for pod in $(kubectl get pods -n "$NS" -l llm-d.ai/role=decode -o jsonpath='{.items[*].metadata.name}'); do
+    for pod in $(kubectl get pods -n "$NS" -l "$DECODE_SELECTOR" -o jsonpath='{.items[*].metadata.name}'); do
         echo "Resetting prefix cache on decode $pod..."
         for port in 8200 8201 8202 8203 8204 8205 8206 8207; do
             kubectl exec -n "$NS" "$pod" -c vllm -- \
@@ -395,7 +401,7 @@ clear-kv-cache:
         done
     done
     # Clear NVMe filesystem tier
-    for pod in $(kubectl get pods -n "$NS" -l llm-d.ai/role -o jsonpath='{.items[*].metadata.name}'); do
+    for pod in $(kubectl get pods -n "$NS" -l "$ALL_WORKER_SELECTOR" -o jsonpath='{.items[*].metadata.name}'); do
         echo "Clearing NVMe KV cache on $pod..."
         kubectl exec -n "$NS" "$pod" -c vllm -- rm -rf /mnt/nvme-cache/* 2>/dev/null || true
     done
@@ -420,11 +426,12 @@ vllm-version dest=".":
     #!/usr/bin/env bash
     set -euo pipefail
     NS={{NAMESPACE}}
+    PREFILL_SELECTOR=$(just --quiet _pod-selector prefill)
     # Image tag
-    kubectl get pod -n "$NS" -l llm-d.ai/role=prefill -o jsonpath='{.items[0].spec.containers[0].image}' > "{{dest}}/vllm_image.txt"
+    kubectl get pod -n "$NS" -l "$PREFILL_SELECTOR" -o jsonpath='{.items[0].spec.containers[0].image}' > "{{dest}}/vllm_image.txt"
     echo "" >> "{{dest}}/vllm_image.txt"
     # vLLM version from prefill pod startup logs
-    POD=$(kubectl get pod -n "$NS" -l llm-d.ai/role=prefill -o jsonpath='{.items[0].metadata.name}')
+    POD=$(kubectl get pod -n "$NS" -l "$PREFILL_SELECTOR" -o jsonpath='{.items[0].metadata.name}')
     kubectl logs -n "$NS" "$POD" --all-containers 2>/dev/null \
       | sed -n 's/.*version \([^ ]*\).*/\1/p' | head -1 > "{{dest}}/vllm_version.txt" || true
     echo "vllm version saved to {{dest}}/"
@@ -436,18 +443,20 @@ dump-logs dest=".":
     #!/usr/bin/env bash
     set -euo pipefail
     NS={{NAMESPACE}}
+    WORKER_SELECTOR=$(just --quiet _pod-selector)
+    INSTANCE=$(just --quiet _manifesto-info | sed -n 's/^instance=//p')
     mkdir -p "{{dest}}/logs"
-    for pod in $(kubectl get pods -n "$NS" -l llm-d.ai/role -o jsonpath='{.items[*].metadata.name}'); do
+    for pod in $(kubectl get pods -n "$NS" -l "$WORKER_SELECTOR" -o jsonpath='{.items[*].metadata.name}'); do
         echo "  logs: $pod"
         kubectl logs -n "$NS" "$pod" --all-containers > "{{dest}}/logs/${pod}.log" 2>&1 || true
     done
     # EPP
-    for pod in $(kubectl get pods -n "$NS" -l llm-d-router-gateway=wide-ep-lws-epp -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
+    for pod in $(kubectl get pods -n "$NS" -l "app.kubernetes.io/instance=${INSTANCE},llm-d-router-gateway=wide-ep-lws-epp" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
         echo "  logs: $pod"
         kubectl logs -n "$NS" "$pod" --all-containers > "{{dest}}/logs/${pod}.log" 2>&1 || true
     done
     # Gateway
-    for pod in $(kubectl get pods -n "$NS" -l gateway.networking.k8s.io/gateway-name -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
+    for pod in $(kubectl get pods -n "$NS" -l "app.kubernetes.io/instance=${INSTANCE},gateway.networking.k8s.io/gateway-name" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
         echo "  logs: $pod"
         kubectl logs -n "$NS" "$pod" --all-containers > "{{dest}}/logs/${pod}.log" 2>&1 || true
     done
@@ -609,6 +618,17 @@ _gpu-telemetry-args:
         printf -- '--gpu-telemetry %s\n' "$URLS"
     else
         printf -- '--no-gpu-telemetry\n'
+    fi
+
+_pod-selector role="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    INFO=$(just --quiet _manifesto-info)
+    INSTANCE=$(printf '%s\n' "$INFO" | sed -n 's/^instance=//p')
+    if [ -n "{{role}}" ]; then
+        printf 'app.kubernetes.io/instance=%s,llm-d.ai/role=%s\n' "$INSTANCE" "{{role}}"
+    else
+        printf 'app.kubernetes.io/instance=%s,llm-d.ai/role\n' "$INSTANCE"
     fi
 
 _smoke-interactivity dest concurrency:
