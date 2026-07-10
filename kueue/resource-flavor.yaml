@@ -5,6 +5,7 @@ metadata:
 spec:
   nodeLabels:
     nvidia.com/gpu.product: "NVIDIA-GB200"
+    node-role.kubernetes.io/hpc-rack-2: ""
   tolerations:
     - key: nvidia.com/gpu
       operator: Exists
