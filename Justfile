@@ -343,6 +343,18 @@ smoke-e2e dest="results_smoke" concurrency="1" duration="60":
 results dest="./results":
     @echo "AIPerf Jobs copy artifacts directly into the run directory; no runner pod copy is needed."
 
+_copy-result-from-pvc remote dest:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    NS={{NAMESPACE}}
+    SELECTOR=$(just --quiet _pod-selector prefill)
+    PVC_POD=$(kubectl get pod -n "$NS" -l "$SELECTOR" -o jsonpath='{.items[0].metadata.name}')
+    if ! kubectl exec -n "$NS" "$PVC_POD" -c vllm -- test -f "{{remote}}/profile_export_aiperf.json" 2>/dev/null; then
+        exit 1
+    fi
+    mkdir -p "{{dest}}"
+    kubectl cp -c vllm "$NS/${PVC_POD}:{{remote}}/." "{{dest}}"
+
 # Wait for all running requests to drain on prefill and decode pods.
 drain:
     #!/usr/bin/env bash
@@ -698,6 +710,11 @@ sweep-concurrency config_name dest="." duration="900":
     FAILED=""
     for C in {{benchmark_concurrencies}}; do
         RDIR="{{dest}}/results_{{config_name}}_c${C}"
+        DEST_CLEAN=$(printf '%s' "$RDIR" | sed 's#^\./##')
+        REMOTE="{{lustre_prefix}}/{{manifesto_user}}/${DEST_CLEAN}"
+        if [ ! -f "$RDIR/profile_export_aiperf.json" ] && just _copy-result-from-pvc "$REMOTE" "$RDIR" 2>/dev/null; then
+            echo "=== concurrency=$C restored from PVC, skipping ==="
+        fi
         if [ -f "$RDIR/profile_export_aiperf.json" ]; then
             echo "=== concurrency=$C already exists, skipping ==="
             continue
