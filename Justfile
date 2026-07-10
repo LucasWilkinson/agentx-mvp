@@ -487,13 +487,27 @@ report outdir:
         POD=$(echo "$SETUP_NAMESPACES" | grep -o "|${NS}|[^|]*|" | head -1 | cut -d'|' -f3)
         GRAFANA_URL="http://{{grafana_service}}.{{grafana_namespace}}.svc.cluster.local:80"
         NAME=$(basename "$dir")
+        if [ -f "$PARENT/config_name.txt" ]; then
+            DEPLOYMENT=$(cat "$PARENT/config_name.txt")
+        else
+            DEPLOYMENT=${NAME#results_}
+            DEPLOYMENT=${DEPLOYMENT%_c*}
+        fi
+        if [ -f "$PARENT/pods.txt" ]; then
+            POD_REGEX=$(cat "$PARENT/pods.txt")
+        else
+            POD_REGEX="$DEPLOYMENT"
+        fi
         echo "=== $NAME ($NS): scraping Grafana ==="
         TIMESTAMPS=$(python3 -c "import json; d=json.load(open('$dir/profile_export_aiperf.json')); print(d['min_request_timestamp']['avg']/1e9-60); print(d['max_response_timestamp']['avg']/1e9+60)")
         START=$(echo "$TIMESTAMPS" | head -1)
         END=$(echo "$TIMESTAMPS" | tail -1)
         echo "  Time range: $START → $END"
+        echo "  Deployment: $DEPLOYMENT; pod filter seed: $POD_REGEX"
         kubectl exec -n "$NS" "$POD" -- python3 /workspace/export_dashboard.py \
             --grafana-url "$GRAFANA_URL" \
+            --deployment "$DEPLOYMENT" \
+            --pod-regex "$POD_REGEX" \
             single --start "$START" --end "$END" -o "/workspace/dashboard_${NAME}.html" || {
             echo "  WARNING: scrape failed for $NAME, skipping"
             continue
