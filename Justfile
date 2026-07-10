@@ -96,10 +96,10 @@ warmup:
     done
 
 # Run the AgentX-MVP benchmark as a Kueue-managed Kubernetes Job.
-run concurrency=concurrency duration=duration dest="./results":
-    just _run-job {{concurrency}} {{duration}} "{{dest}}" ""
+run concurrency=concurrency duration=duration dest="./results" attempt="1":
+    just _run-job {{concurrency}} {{duration}} "{{dest}}" "" {{attempt}}
 
-_run-job concurrency duration dest unsafe_args:
+_run-job concurrency duration dest unsafe_args attempt:
     #!/usr/bin/env bash
     set -euo pipefail
     NS={{NAMESPACE}}
@@ -107,9 +107,10 @@ _run-job concurrency duration dest unsafe_args:
     SERVER_METRICS_ARGS=$(just --quiet _server-metrics-args)
     GPU_TELEMETRY_ARGS=$(just --quiet _gpu-telemetry-args)
     TS=$(date -u +%Y%m%d%H%M%S)
-    JOB="agentx-aiperf-c{{concurrency}}-${TS}"
+    JOB="agentx-aiperf-c{{concurrency}}-a{{attempt}}-${TS}"
     DEST_CLEAN=$(printf '%s' "{{dest}}" | sed 's#^\./##')
-    ARTIFACT_DIR="{{lustre_prefix}}/{{manifesto_user}}/${DEST_CLEAN}"
+    CANONICAL_ARTIFACT_DIR="{{lustre_prefix}}/{{manifesto_user}}/${DEST_CLEAN}"
+    ARTIFACT_DIR="${CANONICAL_ARTIFACT_DIR}_attempt{{attempt}}"
     TIMEOUT=$(({{duration}} + 7200))
     TMP=$(mktemp)
     trap "rm -f $TMP" EXIT
@@ -153,6 +154,8 @@ _run-job concurrency duration dest unsafe_args:
                   value: "{{unsafe_args}}"
                 - name: ARTIFACT_DIR
                   value: "${ARTIFACT_DIR}"
+                - name: CANONICAL_ARTIFACT_DIR
+                  value: "${CANONICAL_ARTIFACT_DIR}"
               envFrom:
                 - secretRef:
                     name: aiperf-hf-token
@@ -167,8 +170,13 @@ _run-job concurrency duration dest unsafe_args:
                     echo "Refusing to clean unsafe ARTIFACT_DIR='\$ARTIFACT_DIR'" >&2
                     exit 1
                   fi
+                  if [ -z "\$CANONICAL_ARTIFACT_DIR" ] || [ "\$CANONICAL_ARTIFACT_DIR" = "/" ]; then
+                    echo "Refusing to promote unsafe CANONICAL_ARTIFACT_DIR='\$CANONICAL_ARTIFACT_DIR'" >&2
+                    exit 1
+                  fi
                   rm -rf "\$ARTIFACT_DIR"
                   mkdir -p "\$ARTIFACT_DIR/logs"
+                  set +e
                   /opt/venv/bin/aiperf profile \
                     --scenario inferencex-agentx-mvp \
                     \$UNSAFE_ARGS \
@@ -186,7 +194,19 @@ _run-job concurrency duration dest unsafe_args:
                     --output-artifact-dir "\$ARTIFACT_DIR" \
                     --ui simple \
                     2>&1 | tee "\$ARTIFACT_DIR/logs/aiperf.log"
-                  test "\${PIPESTATUS[0]}" -eq 0
+                  STATUS="\${PIPESTATUS[0]}"
+                  set -e
+                  if [ "\$STATUS" -ne 0 ]; then
+                    exit "\$STATUS"
+                  fi
+                  if [ ! -f "\$ARTIFACT_DIR/profile_export_aiperf.json" ]; then
+                    echo "ERROR: profile_export_aiperf.json missing from \$ARTIFACT_DIR after successful aiperf exit" >&2
+                    find "\$ARTIFACT_DIR" -maxdepth 2 -type f | sort >&2 || true
+                    exit 1
+                  fi
+                  rm -rf "\$CANONICAL_ARTIFACT_DIR"
+                  mkdir -p "\$(dirname "\$CANONICAL_ARTIFACT_DIR")"
+                  cp -a "\$ARTIFACT_DIR/." "\$CANONICAL_ARTIFACT_DIR/"
               resources:
                 requests:
                   cpu: "4"
@@ -210,7 +230,8 @@ _run-job concurrency duration dest unsafe_args:
     EOF
     kubectl apply -n "$NS" -f "$TMP"
     echo "Benchmark job submitted: $JOB"
-    echo "Artifacts: $ARTIFACT_DIR"
+    echo "Attempt artifacts: $ARTIFACT_DIR"
+    echo "Canonical artifacts: $CANONICAL_ARTIFACT_DIR"
     echo "Waiting for benchmark pod..."
     POD=""
     while [ -z "$POD" ]; do
@@ -252,15 +273,38 @@ _run-job concurrency duration dest unsafe_args:
         fi
         sleep 10
     done
-    kubectl wait -n "$NS" --for=condition=Complete "job/$JOB" --timeout="${TIMEOUT}s" || {
-        kubectl logs -n "$NS" "job/$JOB" --all-containers --tail=200 || true
-        kubectl describe -n "$NS" "job/$JOB" || true
+    JOB_DEADLINE=$((SECONDS + TIMEOUT))
+    while true; do
+        COMPLETE=$(kubectl get job -n "$NS" "$JOB" -o jsonpath='{range .status.conditions[?(@.type=="Complete")]}{.status}{end}' 2>/dev/null || true)
+        FAILED=$(kubectl get job -n "$NS" "$JOB" -o jsonpath='{range .status.conditions[?(@.type=="Failed")]}{.status}{end}' 2>/dev/null || true)
+        if [ "$COMPLETE" = "True" ]; then
+            echo "Benchmark job completed: $JOB"
+            break
+        fi
+        if [ "$FAILED" = "True" ]; then
+            kubectl logs -n "$NS" "job/$JOB" --all-containers --tail=200 || true
+            kubectl describe -n "$NS" "job/$JOB" || true
+            exit 1
+        fi
+        if [ "$SECONDS" -ge "$JOB_DEADLINE" ]; then
+            echo "ERROR: benchmark job did not complete within ${TIMEOUT}s"
+            kubectl logs -n "$NS" "job/$JOB" --all-containers --tail=200 || true
+            kubectl describe -n "$NS" "job/$JOB" || true
+            exit 1
+        fi
+        sleep 10
+    done
+    PVC_POD=$(kubectl get pod -n "$NS" -l llm-d.ai/role=prefill -o jsonpath='{.items[0].metadata.name}')
+    kubectl exec -n "$NS" "$PVC_POD" -c vllm -- test -f "${CANONICAL_ARTIFACT_DIR}/profile_export_aiperf.json" || {
+        echo "ERROR: profile_export_aiperf.json missing from canonical PVC path after job completion"
+        kubectl exec -n "$NS" "$PVC_POD" -c vllm -- find "$CANONICAL_ARTIFACT_DIR" -maxdepth 2 -type f 2>/dev/null || true
         exit 1
     }
     mkdir -p "{{dest}}/logs"
-    kubectl cp "$NS/${POD}:${ARTIFACT_DIR}/." "{{dest}}" 2>/dev/null || true
+    kubectl cp -c vllm "$NS/${PVC_POD}:${CANONICAL_ARTIFACT_DIR}/." "{{dest}}"
     printf '%s\n' "$JOB" > "{{dest}}/job_name.txt"
-    printf '%s\n' "$ARTIFACT_DIR" > "{{dest}}/remote_artifact_dir.txt"
+    printf '%s\n' "$CANONICAL_ARTIFACT_DIR" > "{{dest}}/remote_artifact_dir.txt"
+    printf '%s\n' "$ARTIFACT_DIR" > "{{dest}}/remote_attempt_artifact_dir.txt"
     if [ ! -f "{{dest}}/profile_export_aiperf.json" ]; then
         echo "ERROR: profile_export_aiperf.json not found after job completion"
         exit 1
@@ -270,7 +314,7 @@ _run-job concurrency duration dest unsafe_args:
 # Fast plumbing validation. Uses --unsafe-override so it runs below the
 # scenario's 900s minimum; result is marked submission_valid: false.
 smoke concurrency="1" duration="60" dest="results_smoke":
-    just _run-job {{concurrency}} {{duration}} "{{dest}}" "--unsafe-override"
+    just _run-job {{concurrency}} {{duration}} "{{dest}}" "--unsafe-override" 1
 
 # End-to-end smoke workflow: run a small profile, copy artifacts, export the
 # Grafana dashboard, and build interactivity_vs_throughput.html.
@@ -642,7 +686,7 @@ sweep-concurrency config_name dest="." duration="900":
             fi
             just drain
             just clear-kv-cache
-            if just warmup && just run $C {{duration}} "$RDIR"; then
+            if just warmup && just run $C {{duration}} "$RDIR" "$attempt"; then
                 RUN_OK=true
                 break
             fi
