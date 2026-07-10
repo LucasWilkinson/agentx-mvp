@@ -43,6 +43,7 @@ pod_start_timeout := env_var_or_default('POD_START_TIMEOUT', '900')
 monitoring_namespace := env_var_or_default('MONITORING_NAMESPACE', NAMESPACE)
 prometheus_namespace := env_var_or_default('PROMETHEUS_NAMESPACE', monitoring_namespace)
 prometheus_service := env_var_or_default('PROMETHEUS_SERVICE', 'prometheus-server')
+prometheus_snapshot := env_var_or_default('PROMETHEUS_SNAPSHOT', 'false')
 grafana_namespace := env_var_or_default('GRAFANA_NAMESPACE', monitoring_namespace)
 grafana_service := env_var_or_default('GRAFANA_SERVICE', 'grafana')
 concurrency := "64"
@@ -511,23 +512,11 @@ report outdir:
         fi
         if echo "$SNAPPED" | grep -q "|${NS}|"; then continue; fi
         SNAPPED="${SNAPPED}|${NS}|"
-        PROM_NS="{{prometheus_namespace}}"
-        PROM_POD=$(kubectl get pod -n "$PROM_NS" -l app.kubernetes.io/name=prometheus,app.kubernetes.io/component=server -o jsonpath='{.items[0].metadata.name}' 2>/dev/null) || continue
-        echo "=== $PROM_NS: snapshotting Prometheus TSDB for $NS ==="
-        SNAP_NAME=$(kubectl exec -n "$PROM_NS" "$PROM_POD" -c prometheus-server -- \
-            wget -qO- --post-data= http://localhost:9090/api/v1/admin/tsdb/snapshot 2>/dev/null \
-            | python3 -c "import json,sys; print(json.load(sys.stdin)['data']['name'])" 2>/dev/null) || {
-            echo "  WARNING: snapshot failed for $PROM_NS, skipping"
-            continue
-        }
-        SNAP_DIR="$PARENT/prometheus_snapshot"
-        mkdir -p "$SNAP_DIR"
-        kubectl cp "$PROM_NS/${PROM_POD}:/data/snapshots/${SNAP_NAME}" "$SNAP_DIR" -c prometheus-server 2>/dev/null || {
-            echo "  WARNING: snapshot copy failed for $PROM_NS"
-            continue
-        }
-        kubectl exec -n "$PROM_NS" "$PROM_POD" -c prometheus-server -- rm -rf "/data/snapshots/${SNAP_NAME}" 2>/dev/null || true
-        echo "  Saved to $SNAP_DIR"
+        if [ "{{prometheus_snapshot}}" = "true" ]; then
+            just snapshot-prometheus "$NS" "$PARENT"
+        else
+            echo "=== Prometheus TSDB snapshot disabled (PROMETHEUS_SNAPSHOT=false) ==="
+        fi
     done
     python3 gen_interactivity_chart.py "$(dirname "{{outdir}}")" 2>/dev/null || true
 
