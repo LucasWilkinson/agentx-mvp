@@ -27,6 +27,8 @@ lustre_claim := env_var_or_default('LUSTRE_CLAIM', 'lustre-pvc-vllm')
 lustre_mount := env_var_or_default('LUSTRE_MOUNT', '/mnt/lustre')
 lustre_prefix := env_var_or_default('LUSTRE_PREFIX', '/mnt/lustre/agentx-mvp')
 orchestrator_image := env_var_or_default('ORCHESTRATOR_IMAGE', 'quay.io/tms/benchmark-orchestrator:amd64')
+orchestrator_agentx_repo := env_var_or_default('ORCHESTRATOR_AGENTX_REPO', 'https://github.com/tlrmchlsmth/agentx-mvp.git')
+orchestrator_agentx_ref := env_var_or_default('ORCHESTRATOR_AGENTX_REF', 'agentx-kueue-pvc-jobs')
 orchestrator_manifesto_repo := env_var_or_default('ORCHESTRATOR_MANIFESTO_REPO', 'https://github.com/tlrmchlsmth/llm-manifesto.git')
 orchestrator_manifesto_ref := env_var_or_default('ORCHESTRATOR_MANIFESTO_REF', 'main')
 orchestrator_deploy := "benchmark-orchestrator"
@@ -816,9 +818,11 @@ orchestrator-run outdir duration="900":
       MANIFESTO_ARGS="{{manifesto_args}}" \
       KUEUE_QUEUE="{{kueue_queue}}" \
       MAX_CONTEXT_LENGTH="{{max_context_length}}" \
+      AGENTX_REPO="{{orchestrator_agentx_repo}}" \
+      AGENTX_REF="{{orchestrator_agentx_ref}}" \
       SWEEP_OUTDIR="{{outdir}}" \
       SWEEP_DURATION="{{duration}}" \
-      bash -lc 'cd /workspace/agentx-mvp; rm -f /workspace/orchestrator-sweep.exit_code; : > /workspace/orchestrator-sweep.log; nohup bash -lc '"'"'just sweep "$SWEEP_OUTDIR" "$SWEEP_DURATION" > /workspace/orchestrator-sweep.log 2>&1; code=$?; echo "$code" > /workspace/orchestrator-sweep.exit_code; rm -f /workspace/orchestrator-sweep.pid; exit "$code"'"'"' </dev/null >/dev/null 2>&1 & pid=$!; echo "$pid" > /workspace/orchestrator-sweep.pid; echo "Launched PID $pid"'
+      bash -lc 'set -euo pipefail; if [ ! -d /workspace/agentx-mvp/.git ]; then rm -rf /workspace/agentx-mvp; git clone "$AGENTX_REPO" /workspace/agentx-mvp; fi; git -C /workspace/agentx-mvp fetch origin "$AGENTX_REF"; git -C /workspace/agentx-mvp checkout FETCH_HEAD; cd /workspace/agentx-mvp; rm -f /workspace/orchestrator-sweep.exit_code; : > /workspace/orchestrator-sweep.log; nohup bash -lc '"'"'just sweep "$SWEEP_OUTDIR" "$SWEEP_DURATION" > /workspace/orchestrator-sweep.log 2>&1; code=$?; echo "$code" > /workspace/orchestrator-sweep.exit_code; rm -f /workspace/orchestrator-sweep.pid; exit "$code"'"'"' </dev/null >/dev/null 2>&1 & pid=$!; echo "$pid" > /workspace/orchestrator-sweep.pid; echo "Launched PID $pid"'
     echo "Sweep running detached. Monitor: just orchestrator-logs"
 
 orchestrator-logs:
