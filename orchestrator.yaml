@@ -67,3 +67,23 @@ spec:
               cpu: "4"
               memory: 8Gi
               ephemeral-storage: 10Gi
+          volumeMounts:
+            - name: orchestrator-code
+              mountPath: /workspace/agentx-mvp/Justfile
+              subPath: Justfile
+            - name: orchestrator-code
+              mountPath: /workspace/agentx-mvp/inject_kueue_queue.py
+              subPath: inject_kueue_queue.py
+            - name: orchestrator-code
+              mountPath: /workspace/agentx-mvp/export_dashboard.py
+              subPath: export_dashboard.py
+            - name: orchestrator-code
+              mountPath: /workspace/agentx-mvp/gen_interactivity_chart.py
+              subPath: gen_interactivity_chart.py
+            - name: orchestrator-code
+              mountPath: /workspace/agentx-mvp/extract_timestamps.py
+              subPath: extract_timestamps.py
+      volumes:
+        - name: orchestrator-code
+          configMap:
+            name: benchmark-orchestrator-code
