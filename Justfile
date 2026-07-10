@@ -30,7 +30,7 @@ orchestrator_image := env_var_or_default('ORCHESTRATOR_IMAGE', 'quay.io/tms/benc
 orchestrator_manifesto_repo := env_var_or_default('ORCHESTRATOR_MANIFESTO_REPO', 'https://github.com/tlrmchlsmth/llm-manifesto.git')
 orchestrator_manifesto_ref := env_var_or_default('ORCHESTRATOR_MANIFESTO_REF', 'main')
 orchestrator_deploy := "benchmark-orchestrator"
-orchestrator_code_configmap := "benchmark-orchestrator-code"
+orchestrator_spec_configmap := "benchmark-orchestrator-spec"
 model     := env_var_or_default('MODEL', 'deepseek-ai/DeepSeek-V4-Pro')
 model_label := env_var_or_default('MODEL_LABEL', 'DeepSeek-V4-Pro')
 max_context_length := env_var_or_default('MAX_CONTEXT_LENGTH', '128000')
@@ -38,6 +38,7 @@ url       := env_var_or_default('URL', '')
 server_metrics_url := env_var_or_default('SERVER_METRICS_URL', '')
 gpu_telemetry_urls := env_var_or_default('GPU_TELEMETRY_URLS', '')
 benchmark_retries := env_var_or_default('BENCHMARK_RETRIES', '3')
+benchmark_concurrencies := env_var_or_default('BENCHMARK_CONCURRENCIES', '64 256')
 pod_start_timeout := env_var_or_default('POD_START_TIMEOUT', '900')
 monitoring_namespace := env_var_or_default('MONITORING_NAMESPACE', NAMESPACE)
 prometheus_namespace := env_var_or_default('PROMETHEUS_NAMESPACE', monitoring_namespace)
@@ -672,7 +673,7 @@ sweep-concurrency config_name dest="." duration="900":
     #!/usr/bin/env bash
     set -uo pipefail
     FAILED=""
-    for C in 64 256; do
+    for C in {{benchmark_concurrencies}}; do
         RDIR="{{dest}}/results_{{config_name}}_c${C}"
         if [ -f "$RDIR/profile_export_aiperf.json" ]; then
             echo "=== concurrency=$C already exists, skipping ==="
@@ -729,7 +730,7 @@ sweep outdir duration="900":
     PODS=$(printf '%s\n' "$INFO" | sed -n 's/^pods=//p')
     dir="{{outdir}}/results_${CONFIG_NAME}"
     ALL_DONE=true
-    for C in 64 256; do
+    for C in {{benchmark_concurrencies}}; do
         if [ ! -f "$dir/results_${CONFIG_NAME}_c${C}/profile_export_aiperf.json" ]; then
             ALL_DONE=false
             break
@@ -791,21 +792,24 @@ orchestrator-build:
       -f Dockerfile.orchestrator -t {{orchestrator_image}} .
     podman push {{orchestrator_image}}
 
-orchestrator-code-config:
+orchestrator-spec-config:
     #!/usr/bin/env bash
     set -euo pipefail
-    kubectl create configmap {{orchestrator_code_configmap}} -n {{NAMESPACE}} \
-      --from-file=Justfile=Justfile \
-      --from-file=inject_kueue_queue.py=inject_kueue_queue.py \
-      --from-file=export_dashboard.py=export_dashboard.py \
-      --from-file=gen_interactivity_chart.py=gen_interactivity_chart.py \
-      --from-file=extract_timestamps.py=extract_timestamps.py \
+    TMP=$(mktemp)
+    trap "rm -f $TMP" EXIT
+    {
+        printf "BENCHMARK_CONCURRENCIES='%s'\n" "{{benchmark_concurrencies}}"
+        printf "BENCHMARK_RETRIES='%s'\n" "{{benchmark_retries}}"
+        printf "POD_START_TIMEOUT='%s'\n" "{{pod_start_timeout}}"
+    } > "$TMP"
+    kubectl create configmap {{orchestrator_spec_configmap}} -n {{NAMESPACE}} \
+      --from-file=benchmark-sweep.env="$TMP" \
       --dry-run=client -o yaml | kubectl apply -n {{NAMESPACE}} -f -
 
 orchestrator-deploy:
     #!/usr/bin/env bash
     set -euo pipefail
-    just orchestrator-code-config
+    just orchestrator-spec-config
     kubectl apply -n {{NAMESPACE}} -f orchestrator.yaml
     kubectl set image -n {{NAMESPACE}} deploy/{{orchestrator_deploy}} orchestrator={{orchestrator_image}}
     kubectl rollout restart -n {{NAMESPACE}} deploy/{{orchestrator_deploy}}
@@ -831,7 +835,7 @@ orchestrator-run outdir duration="900":
       MAX_CONTEXT_LENGTH="{{max_context_length}}" \
       SWEEP_OUTDIR="{{outdir}}" \
       SWEEP_DURATION="{{duration}}" \
-      bash -lc 'cd /workspace/agentx-mvp; rm -f /workspace/orchestrator-sweep.exit_code; : > /workspace/orchestrator-sweep.log; nohup bash -lc '"'"'just sweep "$SWEEP_OUTDIR" "$SWEEP_DURATION" > /workspace/orchestrator-sweep.log 2>&1; code=$?; echo "$code" > /workspace/orchestrator-sweep.exit_code; rm -f /workspace/orchestrator-sweep.pid; exit "$code"'"'"' </dev/null >/dev/null 2>&1 & pid=$!; echo "$pid" > /workspace/orchestrator-sweep.pid; echo "Launched PID $pid"'
+      bash -lc 'set -euo pipefail; set -a; [ -f /workspace/benchmark-sweep.env ] && . /workspace/benchmark-sweep.env; set +a; cd /workspace/agentx-mvp; rm -f /workspace/orchestrator-sweep.exit_code; : > /workspace/orchestrator-sweep.log; nohup bash -lc '"'"'just sweep "$SWEEP_OUTDIR" "$SWEEP_DURATION" > /workspace/orchestrator-sweep.log 2>&1; code=$?; echo "$code" > /workspace/orchestrator-sweep.exit_code; rm -f /workspace/orchestrator-sweep.pid; exit "$code"'"'"' </dev/null >/dev/null 2>&1 & pid=$!; echo "$pid" > /workspace/orchestrator-sweep.pid; echo "Launched PID $pid"'
     echo "Sweep running detached. Monitor: just orchestrator-logs"
 
 orchestrator-logs:
