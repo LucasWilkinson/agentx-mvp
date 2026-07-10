@@ -36,6 +36,7 @@ max_context_length := env_var_or_default('MAX_CONTEXT_LENGTH', '128000')
 url       := env_var_or_default('URL', '')
 server_metrics_url := env_var_or_default('SERVER_METRICS_URL', '')
 gpu_telemetry_urls := env_var_or_default('GPU_TELEMETRY_URLS', '')
+benchmark_retries := env_var_or_default('BENCHMARK_RETRIES', '3')
 monitoring_namespace := env_var_or_default('MONITORING_NAMESPACE', NAMESPACE)
 prometheus_namespace := env_var_or_default('PROMETHEUS_NAMESPACE', monitoring_namespace)
 prometheus_service := env_var_or_default('PROMETHEUS_SERVICE', 'prometheus-server')
@@ -161,6 +162,11 @@ _run-job concurrency duration dest unsafe_args:
               args:
                 - |-
                   set -euo pipefail
+                  if [ -z "\$ARTIFACT_DIR" ] || [ "\$ARTIFACT_DIR" = "/" ]; then
+                    echo "Refusing to clean unsafe ARTIFACT_DIR='\$ARTIFACT_DIR'" >&2
+                    exit 1
+                  fi
+                  rm -rf "\$ARTIFACT_DIR"
                   mkdir -p "\$ARTIFACT_DIR/logs"
                   /opt/venv/bin/aiperf profile \
                     --scenario inferencex-agentx-mvp \
@@ -587,12 +593,28 @@ sweep-concurrency config_name dest="." duration="900":
             continue
         fi
         echo "=== concurrency=$C ({{duration}}s) ==="
-        just drain
-        just clear-kv-cache
-        if ! just warmup || ! just run $C {{duration}} "$RDIR"; then
+        RUN_OK=false
+        attempt=1
+        while [ "$attempt" -le "{{benchmark_retries}}" ]; do
+            if [ "$attempt" -gt 1 ]; then
+                echo "=== concurrency=$C retry $attempt/{{benchmark_retries}} ==="
+            fi
+            just drain
+            just clear-kv-cache
+            if just warmup && just run $C {{duration}} "$RDIR"; then
+                RUN_OK=true
+                break
+            fi
+            echo "Attempt $attempt/{{benchmark_retries}} failed for concurrency=$C"
+            just wipe 2>/dev/null || true
+            attempt=$((attempt + 1))
+            if [ "$attempt" -le "{{benchmark_retries}}" ]; then
+                sleep 30
+            fi
+        done
+        if [ "$RUN_OK" != true ]; then
             echo "FAILED: concurrency=$C, skipping"
             FAILED="${FAILED} c${C}"
-            just wipe 2>/dev/null || true
             continue
         fi
         just dump-logs "$RDIR"
