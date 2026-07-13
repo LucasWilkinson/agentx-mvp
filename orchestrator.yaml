@@ -27,20 +27,20 @@ subjects:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: benchmark-seed
+  name: benchmark-orchestrator
   labels:
-    app: benchmark-seed
+    app: benchmark-orchestrator
 spec:
   replicas: 1
   strategy:
     type: Recreate
   selector:
     matchLabels:
-      app: benchmark-seed
+      app: benchmark-orchestrator
   template:
     metadata:
       labels:
-        app: benchmark-seed
+        app: benchmark-orchestrator
     spec:
       serviceAccountName: benchmark-orchestrator
       restartPolicy: Always
@@ -54,8 +54,8 @@ spec:
                     values:
                       - amd64
       containers:
-        - name: seed
-          image: quay.io/rh-ee-ecrncevi/benchmark-seed:amd64
+        - name: orchestrator
+          image: quay.io/tms/benchmark-orchestrator:amd64
           imagePullPolicy: Always
           command: ["sleep", "infinity"]
           workingDir: /workspace
@@ -68,9 +68,10 @@ spec:
               memory: 8Gi
               ephemeral-storage: 10Gi
           volumeMounts:
-            - name: workspace
-              mountPath: /workspace
+            - name: orchestrator-spec
+              mountPath: /workspace/benchmark-sweep.env
+              subPath: benchmark-sweep.env
       volumes:
-        - name: workspace
-          emptyDir:
-            sizeLimit: 10Gi
+        - name: orchestrator-spec
+          configMap:
+            name: benchmark-orchestrator-spec

@@ -5,6 +5,8 @@ AIPerf AgentX-MVP benchmark harness for llm-d/manifesto deployments with prefill
 ## Prerequisites
 
 - `kubectl` configured for your cluster
+- Kueue installed in the cluster
+- `lustre-pvc-vllm` available in the benchmark namespace
 - `.env` file with:
   ```
   NAMESPACE=vllm
@@ -12,8 +14,10 @@ AIPerf AgentX-MVP benchmark harness for llm-d/manifesto deployments with prefill
   MODEL_SPEC=models/deepseek-v4/1P-EP8-1D-EP8.yaml
   MANIFESTO_CLUSTER=clusters/oci-gb200.yaml
   MANIFESTO_USER=$USER
+  KUEUE_QUEUE=nightly-eval
+  LUSTRE_CLAIM=lustre-pvc-vllm
+  LUSTRE_PREFIX=/mnt/lustre/agentx-mvp
   ```
-- Model and monitoring resources deployed by `llm-manifesto`
 
 Defaults target `deepseek-ai/DeepSeek-V4-Pro` on the smallest GB200/NVL72 manifesto profile and use only the existing `vllm` namespace.
 
@@ -30,23 +34,46 @@ Override these only when manifesto installs the monitoring stack somewhere else.
 ## Quick start
 
 ```bash
-just setup           # deploy the aiperf runner
+just setup           # install queue manifests and deploy the orchestrator
 just check           # verify the model endpoint is reachable
-just run             # run benchmark (default: concurrency=64, duration=900s)
+just run             # run a Kueue-managed AIPerf Job
 just run 16 900      # override concurrency / duration
-just smoke           # fast plumbing test (~60s, marks result invalid)
-just results         # copy artifacts to ./results
-just logs            # tail runner logs
-just shell           # shell into the runner
-just clean           # delete the runner pod
+just smoke           # fast Kueue Job plumbing test (~60s, invalid result)
+just orchestrator-run overnight_results 900  # run the sweep from the in-cluster orchestrator
+just logs            # tail orchestrator logs
+just shell           # shell into the orchestrator
+just clean           # delete benchmark jobs and the orchestrator pod
 ```
+
+The orchestrator image contains this harness at `/workspace/agentx-mvp` and
+`llm-manifesto` at `/workspace/llm-manifesto`; `just orchestrator-run` does not
+copy source trees into the pod. Build it with `just orchestrator-build`.
 
 ## Model Deployment
 
 ```bash
+just setup-kueue     # install/update the GB200 Kueue queue objects
 just start-model     # deploy the llm-manifesto spec
 just stop-model      # tear down the manifesto deployment
 ```
+
+Model deployment is Kueue-aware by default. `just start-model` renders the
+configured `llm-manifesto` spec and labels each rendered `LeaderWorkerSet` with
+`kueue.x-k8s.io/queue-name: nightly-eval`. Override with `KUEUE_QUEUE=...`.
+It does not call the `llm-manifesto` `just start` recipe.
+
+## Benchmark Jobs
+
+Benchmarks run as Kueue-managed `batch/v1` Jobs, not as `kubectl exec` commands
+into a long-lived AIPerf pod. Each Job mounts `LUSTRE_CLAIM` at `/mnt/lustre`
+and writes artifacts to:
+
+```bash
+$LUSTRE_PREFIX/$MANIFESTO_USER/<result-directory>
+```
+
+The local or orchestrator-side result directory receives a copy for report generation,
+but the PVC path is the durable source of truth.
 
 ## Sweep
 

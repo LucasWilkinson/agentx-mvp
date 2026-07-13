@@ -43,6 +43,7 @@ metadata:
     llm-d.ai/inferenceServing: 'true'
     llm-d.ai/model: DeepSeek-V4-Pro
     llm-d.ai/deployment: pd
+    kueue.x-k8s.io/queue-name: nightly-eval
 spec:
   replicas: 1
   rolloutStrategy:
@@ -405,6 +406,7 @@ metadata:
     llm-d.ai/inferenceServing: 'true'
     llm-d.ai/model: DeepSeek-V4-Pro
     llm-d.ai/deployment: pd
+    kueue.x-k8s.io/queue-name: nightly-eval
 spec:
   replicas: 1
   rolloutStrategy:

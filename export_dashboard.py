@@ -14,6 +14,25 @@ from datetime import datetime, timezone
 
 _http_semaphore = threading.Semaphore(32)
 
+SKIP_PANEL_TITLES = {
+    "Decode CUDA Graph Mode (iterations/s)",
+}
+
+SCOPED_METRIC_PREFIXES = (
+    "vllm:",
+    "DCGM_",
+    "nixl_",
+    "llm_d",
+    "llmd_",
+    "envoy_",
+)
+
+POD_MATCHER_RE = re.compile(r'pod\s*(=~|=)\s*"([^"\\]*(?:\\.[^"\\]*)*)"')
+METRIC_SELECTOR_RE = re.compile(
+    r'(?P<metric>[a-zA-Z_:][a-zA-Z0-9_:]*)'
+    r'(?P<selector>\{[^{}]*\})'
+)
+
 
 def parse_relative_time(s):
     if s == "now":
@@ -57,11 +76,17 @@ def grafana_request(base_url, path, auth, data=None):
 def extract_panels(panels):
     result = []
     for p in panels:
+        if should_skip_panel(p):
+            continue
         if p.get("targets"):
             result.append(p)
         if p.get("panels"):
             result.extend(extract_panels(p["panels"]))
     return result
+
+
+def should_skip_panel(panel):
+    return panel.get("title", "") in SKIP_PANEL_TITLES
 
 
 def convert_scenes_to_classic(dashboard):
@@ -124,6 +149,101 @@ def substitute_vars(expr, deployment):
     return expr
 
 
+def prom_regex_escape(s):
+    return s.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def regex_literal(s):
+    return re.escape(s).replace(r"\-", "-")
+
+
+def parse_wide_ep_deployment(deployment):
+    m = re.match(
+        r"^(?P<user>[^-]+)-wide-ep-"
+        r"(?P<prefill>\d+)p-ep(?P<prefill_ep>\d+)-"
+        r"(?P<decode>\d+)d-ep(?P<decode_ep>\d+)$",
+        deployment,
+    )
+    return m.groupdict() if m else None
+
+
+def derive_pod_regex(deployment, pod_regex):
+    parts = []
+
+    def add(part):
+        part = (part or "").strip()
+        if part and part not in parts and part != ".*":
+            parts.append(part)
+
+    add(deployment)
+    for part in re.split(r"[\s,|]+", pod_regex or ""):
+        add(part)
+
+    wide_ep = parse_wide_ep_deployment(deployment)
+    if wide_ep:
+        user = wide_ep["user"]
+        release = deployment[len(user) + 1:]
+        add(regex_literal(deployment) + ".*")
+        add(regex_literal(release) + ".*")
+        for ep in sorted({wide_ep["prefill_ep"], wide_ep["decode_ep"]}):
+            add(regex_literal(f"{user}-vllm-ep{ep}") + "-.*")
+
+    if not parts:
+        return ""
+    return "|".join(f"(?:{p})" for p in parts)
+
+
+def should_scope_metric(metric):
+    return metric.startswith(SCOPED_METRIC_PREFIXES)
+
+
+def scope_promql_expr(expr, pod_regex):
+    if not pod_regex:
+        return expr
+
+    matcher = f'pod=~"{prom_regex_escape(pod_regex)}"'
+
+    def replace_existing_pod_matcher(match):
+        return matcher
+
+    expr = POD_MATCHER_RE.sub(replace_existing_pod_matcher, expr)
+
+    def add_pod_matcher(match):
+        metric = match.group("metric")
+        selector = match.group("selector")
+        if "pod=" in selector or "pod=~" in selector or not should_scope_metric(metric):
+            return match.group(0)
+
+        inner = selector[1:-1].strip()
+        if inner:
+            inner += ", "
+        inner += matcher
+        return f"{metric}" + "{" + inner + "}"
+
+    return METRIC_SELECTOR_RE.sub(add_pod_matcher, expr)
+
+
+def infer_unit(title, unit):
+    if unit:
+        return unit
+    t = title.lower()
+    if "throughput" in t and ("token" in t or "prompt" in t or "generation" in t):
+        return "tps"
+    if "request" in t and ("per second" in t or "rate" in t):
+        return "reqps"
+    if "latency" in t or "time" in t or "ttft" in t or "itl" in t:
+        return "s"
+    if "utilization" in t or ("usage" in t and "cache" in t):
+        return "percentunit"
+    if "bandwidth" in t or "bytes" in t:
+        return "Bps"
+    if "power" in t:
+        return "watt"
+    if "requests" in t or "queue" in t or "preemptions" in t:
+        return "short"
+    return unit
+
+
 def query_prometheus(base_url, auth, ds_id, expr, start, end, step):
     path = f"/api/datasources/proxy/{ds_id}/api/v1/query_range"
     params = urllib.parse.urlencode({
@@ -157,15 +277,20 @@ def export(args):
     else:
         all_panels = dash_body["panels"]
     query_panels = extract_panels(all_panels)
+    pod_regex = derive_pod_regex(args.deployment, args.pod_regex)
     print(f"Found {len(query_panels)} panels with queries")
+    if pod_regex:
+        print(f"Pod filter: {pod_regex}")
 
     row_order = []
     for p in all_panels:
+        if should_skip_panel(p):
+            continue
         if p.get("type") == "row":
             row_order.append({"type": "row", "title": p.get("title", ""), "id": p["id"]})
             if p.get("panels"):
                 for sp in p["panels"]:
-                    if sp.get("targets"):
+                    if sp.get("targets") and not should_skip_panel(sp):
                         row_order.append({"type": "panel", "id": sp["id"]})
         elif p.get("targets"):
             row_order.append({"type": "panel", "id": p["id"]})
@@ -173,7 +298,7 @@ def export(args):
     def query_panel(panel):
         pid = panel["id"]
         title = panel.get("title", f"panel-{pid}")
-        unit = panel.get("fieldConfig", {}).get("defaults", {}).get("unit", "")
+        unit = infer_unit(title, panel.get("fieldConfig", {}).get("defaults", {}).get("unit", ""))
 
         queries = []
         for target in panel.get("targets", []):
@@ -181,6 +306,7 @@ def export(args):
             if not expr:
                 continue
             expr = substitute_vars(expr, args.deployment)
+            expr = scope_promql_expr(expr, pod_regex)
             legend = target.get("legendFormat", "")
             result = query_prometheus(args.grafana_url, args.auth, ds_id, expr, start, end, step)
 
@@ -275,6 +401,19 @@ const UNIT_FMT = {{
   short: v => v > 1e6 ? (v/1e6).toFixed(1)+'M' : v > 1e3 ? (v/1e3).toFixed(1)+'K' : Number(v.toPrecision(4)).toString(),
 }};
 
+const UNIT_LABEL = {{
+  tps: 'tokens/s',
+  reqps: 'requests/s',
+  ops: 'ops/s',
+  percentunit: '%',
+  percent: '%',
+  s: 'seconds',
+  bytes: 'bytes',
+  Bps: 'bytes/s',
+  watt: 'watts',
+  short: 'count',
+}};
+
 const COLORS = ['#7EB26D','#EAB839','#6ED0E0','#EF843C','#E24D42','#1F78C1','#BA43A9','#705DA0',
                 '#508642','#CCA300','#447EBC','#C15C17','#890F02','#0A437C','#6D1F62','#584477'];
 
@@ -309,13 +448,15 @@ const lazyObserver = new IntersectionObserver((entries) => {{
         hovertemplate: '%{{y}}<extra>%{{fullData.name}}</extra>',
       }}));
       const fmt = UNIT_FMT[p.unit];
+      const yTitle = UNIT_LABEL[p.unit] || p.unit || '';
       Plotly.newPlot(plotDiv, traces, {{
-        margin: {{ l: 50, r: 16, t: 4, b: 30 }},
+        margin: {{ l: 58, r: 16, t: 4, b: 30 }},
         paper_bgcolor: 'transparent',
         plot_bgcolor: 'transparent',
         font: {{ color: '#8e8e8e', size: 10 }},
         xaxis: {{ gridcolor: '#2a2a2e', linecolor: '#2a2a2e', tickformat: '%H:%M' }},
         yaxis: {{ gridcolor: '#2a2a2e', linecolor: '#2a2a2e',
+                  title: yTitle ? {{ text: yTitle, font: {{ size: 10 }} }} : undefined,
                   tickformat: fmt ? undefined : '.3s',
                   hoverformat: '.4g' }},
         legend: {{ font: {{ size: 9 }}, orientation: 'h', y: -0.3 }},
@@ -386,6 +527,7 @@ def export_results(args):
     tasks = []
     for d in args.dirs:
         d = os.path.abspath(d)
+        parent = os.path.dirname(d)
         json_path = os.path.join(d, "profile_export_aiperf.json")
         if not os.path.exists(json_path):
             print(f"Skipping {d} — no profile_export_aiperf.json")
@@ -401,9 +543,19 @@ def export_results(args):
 
         out_path = os.path.join(d, "dashboard.html")
         name = os.path.basename(d)
+        deployment = args.deployment
+        pod_regex = args.pod_regex
+        config_name_path = os.path.join(parent, "config_name.txt")
+        pods_path = os.path.join(parent, "pods.txt")
+        if deployment == ".*" and os.path.exists(config_name_path):
+            with open(config_name_path) as f:
+                deployment = f.read().strip()
+        if not pod_regex and os.path.exists(pods_path):
+            with open(pods_path) as f:
+                pod_regex = f.read().strip()
         tasks.append((name, start, end, args.pad, argparse.Namespace(
             start=str(start), end=str(end),
-            deployment=args.deployment, step=args.step,
+            deployment=deployment, pod_regex=pod_regex, step=args.step,
             grafana_url=args.grafana_url, auth=args.auth,
             output=out_path, dashboard=args.dashboard,
         )))
@@ -427,6 +579,7 @@ def export_results(args):
 def main():
     parser = argparse.ArgumentParser(description="Export Grafana dashboard to a self-contained HTML file")
     parser.add_argument("--deployment", default=".*", help="Deployment filter (default: .* for all)")
+    parser.add_argument("--pod-regex", default="", help="Pod regex used to scope dashboard metrics")
     parser.add_argument("--step", type=int, help="Query step in seconds (auto if omitted)")
     parser.add_argument("--grafana-url", default="http://localhost:3001")
     parser.add_argument("--auth", default="admin:admin", help="user:password")

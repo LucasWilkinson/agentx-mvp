@@ -68,6 +68,9 @@ def parse_int(value):
 def tokens_from_cache_config_labels(labels):
     if not isinstance(labels, dict):
         return None
+    kv_cache_size_tokens = parse_int(labels.get('kv_cache_size_tokens'))
+    if kv_cache_size_tokens is not None:
+        return kv_cache_size_tokens
     num_gpu_blocks = parse_int(labels.get('num_gpu_blocks'))
     block_size = parse_int(labels.get('block_size'))
     if num_gpu_blocks is None or block_size is None:
