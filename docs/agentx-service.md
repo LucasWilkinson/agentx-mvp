@@ -116,9 +116,12 @@ kubectl -n "$NAMESPACE" get deploy,svc agentx-service
 kubectl -n "$NAMESPACE" get role agentx-service -o yaml
 ```
 
-The supplied Role can manage Jobs and read their logs, LocalQueues, and owned
-Kueue Workload admission conditions; a read-only ClusterRole permits
-ClusterQueue preflight. Health is `GET /healthz`.
+The supplied namespace Role has only the operations exercised by the service:
+create/get/list/delete Jobs, list their Pods, read Pod logs, get the configured
+LocalQueue, and list the Job's Kueue Workload for admission diagnostics. It has
+no patch, update, watch, exec, Secret, ConfigMap, Deployment, or PVC access. A
+read-only ClusterRole permits only `get` on ClusterQueues for preflight. Health
+is `GET /healthz`.
 Readiness verifies PVC writes, Kubernetes access, active queues, Prometheus,
 and reconciler health. The deploy recipe creates the ClusterRoleBinding for
 the selected `NAMESPACE`; the static manifest contains no cluster namespace.

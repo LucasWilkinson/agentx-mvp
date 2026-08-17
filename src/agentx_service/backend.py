@@ -234,7 +234,7 @@ class KubectlBackend:
         return completed.stdout
 
     def create(self, namespace: str, manifest: dict[str, Any]) -> None:
-        self._run(["apply", "-n", namespace, "-f", "-"], stdin=json.dumps(manifest))
+        self._run(["create", "-n", namespace, "-f", "-"], stdin=json.dumps(manifest))
 
     def observe(self, namespace: str, name: str) -> JobObservation:
         try:

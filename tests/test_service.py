@@ -406,6 +406,28 @@ class ServiceTests(unittest.TestCase):
         self.assertIn(b"truncated", value)
         self.assertIn("--limit-bytes=64", popen.call_args.args[0])
 
+    def test_kubectl_job_submission_uses_create_not_apply(self):
+        calls = []
+
+        class Backend(KubectlBackend):
+            def _run(self, args, *, stdin=None):
+                calls.append((args, stdin))
+                return ""
+
+        Backend().create("bench", {"kind": "Job", "metadata": {"name": "job"}})
+        self.assertEqual(calls[0][0], ["create", "-n", "bench", "-f", "-"])
+        self.assertEqual(json.loads(calls[0][1])["metadata"]["name"], "job")
+
+    def test_shipped_rbac_is_limited_to_exercised_operations(self):
+        root = Path(__file__).resolve().parents[1]
+        deployment = (root / "deploy/agentx-service.yaml").read_text()
+        self.assertIn('verbs: ["create", "get", "list", "delete"]', deployment)
+        self.assertIn('resources: ["pods"]\n    verbs: ["list"]', deployment)
+        self.assertIn('resources: ["localqueues"]\n    verbs: ["get"]', deployment)
+        self.assertIn('resources: ["workloads"]\n    verbs: ["list"]', deployment)
+        self.assertNotIn('"patch"', deployment)
+        self.assertNotIn('"watch"', deployment)
+
     def test_kubectl_readiness_uses_supported_get_flags(self):
         calls = []
 
