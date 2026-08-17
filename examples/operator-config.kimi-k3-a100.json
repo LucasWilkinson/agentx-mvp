@@ -41,9 +41,9 @@
     }
   },
   "storage": {
-    "pvc_name": "lustre-pvc-vllm",
-    "mount_path": "/mnt/lustre",
-    "runs_subdirectory": "agentx-mcp/runs"
+    "pvc_name": "agentx-results",
+    "mount_path": "/mnt/agentx",
+    "runs_subdirectory": "runs"
   },
   "limits": {
     "admission_timeout_seconds": 1800,

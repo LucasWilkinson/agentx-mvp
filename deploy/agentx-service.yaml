@@ -45,19 +45,6 @@ rules:
     resources: ["clusterqueues"]
     verbs: ["get"]
 ---
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: agentx-service-clusterqueue-reader
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: agentx-service-clusterqueue-reader
-subjects:
-  - kind: ServiceAccount
-    name: agentx-service
-    namespace: vllm
----
 apiVersion: v1
 kind: Service
 metadata:
@@ -123,11 +110,11 @@ spec:
               mountPath: /etc/agentx
               readOnly: true
             - name: artifacts
-              mountPath: /mnt/lustre
+              mountPath: /mnt/agentx
       volumes:
         - name: config
           configMap:
             name: agentx-service-config
         - name: artifacts
           persistentVolumeClaim:
-            claimName: lustre-pvc-vllm
+            claimName: agentx-results

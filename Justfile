@@ -16,6 +16,9 @@ set export
 NAMESPACE := env_var_or_default('NAMESPACE', 'vllm')
 repo_root := justfile_directory()
 home := env_var_or_default('HOME', '')
+# Historical manifesto/Lustre defaults are used only by legacy-* compatibility
+# recipes. The typed service reads target, queue, monitoring, and storage values
+# from AGENTX_OPERATOR_CONFIG instead.
 manifesto_root := env_var_or_default('MANIFESTO_ROOT', home + '/code/llm-manifesto')
 manifesto_spec := env_var_or_default('MODEL_SPEC', 'models/deepseek-v4/3P-EP8-1D-EP8.yaml')
 manifesto_cluster := env_var_or_default('MANIFESTO_CLUSTER', 'clusters/oci-gb200.yaml')
@@ -449,7 +452,7 @@ shell:
 clean:
     just wipe
     kubectl delete deploy,service,role,rolebinding,serviceaccount -n {{NAMESPACE}} agentx-service --ignore-not-found=true
-    kubectl delete clusterrolebinding agentx-service-clusterqueue-reader --ignore-not-found=true
+    kubectl delete clusterrolebinding agentx-service-clusterqueue-reader-{{NAMESPACE}} --ignore-not-found=true
     kubectl delete clusterrole agentx-service-clusterqueue-reader --ignore-not-found=true
     kubectl delete configmap agentx-service-config -n {{NAMESPACE}} --ignore-not-found=true
     kubectl delete secret agentx-service-auth -n {{NAMESPACE}} --ignore-not-found=true
@@ -938,6 +941,10 @@ agentx-service-deploy:
       --from-file=operator-config.json="{{agentx_operator_config}}" \
       --dry-run=client -o yaml | kubectl apply -n {{NAMESPACE}} -f -
     kubectl apply -n {{NAMESPACE}} -f deploy/agentx-service.yaml
+    kubectl create clusterrolebinding agentx-service-clusterqueue-reader-{{NAMESPACE}} \
+      --clusterrole=agentx-service-clusterqueue-reader \
+      --serviceaccount="{{NAMESPACE}}:agentx-service" \
+      --dry-run=client -o yaml | kubectl apply -f -
     kubectl rollout restart -n {{NAMESPACE}} deploy/agentx-service
     kubectl rollout status -n {{NAMESPACE}} deploy/agentx-service --timeout=300s
 

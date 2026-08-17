@@ -67,9 +67,10 @@ Replace its expected target counts and PromQL with the rendered deployment's
 actual per-rank PodMonitor coverage before deployment; the example values are
 fail-closed placeholders.
 The service and AIPerf Jobs must mount the same PVC at the configured path.
-The supplied manifest matches the Kimi example's `lustre-pvc-vllm` mounted at
-`/mnt/lustre`, with service data under `agentx-mcp/runs`; adjust both the Deployment and operator document together for a
-different installation. The PVC contains atomic state records, immutable attempt trees,
+The supplied manifest and Kimi example use the storage-neutral
+`agentx-results` claim mounted at `/mnt/agentx`; operators may use any durable
+ReadWriteMany storage implementation by changing the claim and mount path in
+both places. The PVC contains atomic state records, immutable attempt trees,
 canonical successful artifacts, and reports, so a replacement Pod reconstructs
 all non-terminal runs from Kubernetes. A persisted-but-missing Job is recreated
 idempotently; a transient observation error remains retryable.
@@ -102,7 +103,7 @@ small durable error manifest. Artifact listings explicitly report truncation.
 ## Deploy
 
 Build `Dockerfile.orchestrator` with the image used by the Deployment; ensure
-the results PVC and an A100 ClusterQueue covering `cpu`, `memory`, and
+the configured results PVC and a ClusterQueue covering `cpu`, `memory`, and
 `ephemeral-storage` exist; inspect and apply the supplied LocalQueue; then:
 
 ```bash
@@ -119,8 +120,9 @@ The supplied Role can manage Jobs and read their logs, LocalQueues, and owned
 Kueue Workload admission conditions; a read-only ClusterRole permits
 ClusterQueue preflight. Health is `GET /healthz`.
 Readiness verifies PVC writes, Kubernetes access, active queues, Prometheus,
-and reconciler health. Adjust the ClusterRoleBinding subject namespace if it is
-not `vllm`. Apply an environment-specific copy
+and reconciler health. The deploy recipe creates the ClusterRoleBinding for
+the selected `NAMESPACE`; the static manifest contains no cluster namespace.
+Apply an environment-specific copy
 of `deploy/network-policy.example.yaml` only after replacing its documented
 selectors and API CIDR.
 

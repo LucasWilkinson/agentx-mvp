@@ -236,8 +236,17 @@ class ServiceTests(unittest.TestCase):
             (root / "examples/operator-config.kimi-k3-a100.json").read_text()
         )
         deployment = (root / "deploy/agentx-service.yaml").read_text()
+        justfile = (root / "Justfile").read_text()
         self.assertIn(f"claimName: {shipped.storage.pvc_name}", deployment)
         self.assertIn(f"mountPath: {shipped.storage.mount_path}", deployment)
+        self.assertNotIn("lustre", deployment.lower())
+        self.assertNotIn("namespace: vllm", deployment)
+        self.assertIn(
+            '--serviceaccount="{{NAMESPACE}}:agentx-service"', justfile
+        )
+        self.assertIn(
+            "agentx-service-clusterqueue-reader-{{NAMESPACE}}", justfile
+        )
 
     def write_artifacts(self, record, *, monitoring=True):
         attempt = record.attempts[-1]

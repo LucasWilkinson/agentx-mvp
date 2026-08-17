@@ -10,22 +10,26 @@ with [the service contract and deployment guide](docs/agentx-service.md).
 - `kubectl` configured for your cluster
 - Kueue installed in the cluster
 - `AGENTX_API_TOKEN` set for service deployment and MCP clients
-- `lustre-pvc-vllm` available in the benchmark namespace
-- `.env` file with:
-  ```
-  NAMESPACE=vllm
-  MANIFESTO_ROOT=$HOME/code/llm-manifesto
-  MODEL_SPEC=models/deepseek-v4/3P-EP8-1D-EP8.yaml
-  MANIFESTO_CLUSTER=clusters/oci-gb200.yaml
-  MANIFESTO_USER=$USER
-  KUEUE_QUEUE=nightly-eval
-  LUSTRE_CLAIM=lustre-pvc-vllm
-  LUSTRE_PREFIX=/mnt/lustre/agentx-mvp
-  ```
+- an operator-provisioned ReadWriteMany results PVC matching the service
+  manifest and operator configuration (`agentx-results` by default)
 
-Defaults target `deepseek-ai/DeepSeek-V4-Pro` on the smallest GB200/NVL72 manifesto profile and use only the existing `vllm` namespace.
+The historical GB200 helpers additionally use a legacy `.env` file with:
 
-For report/dashboard collection, the harness reads Grafana and Prometheus from:
+```
+NAMESPACE=vllm
+MANIFESTO_ROOT=$HOME/code/llm-manifesto
+MODEL_SPEC=models/deepseek-v4/3P-EP8-1D-EP8.yaml
+MANIFESTO_CLUSTER=clusters/oci-gb200.yaml
+MANIFESTO_USER=$USER
+KUEUE_QUEUE=nightly-eval
+LUSTRE_CLAIM=lustre-pvc-vllm
+LUSTRE_PREFIX=/mnt/lustre/agentx-mvp
+```
+
+These legacy defaults target `deepseek-ai/DeepSeek-V4-Pro` on the smallest
+GB200/NVL72 manifesto profile and use the existing `vllm` namespace.
+
+Legacy report/dashboard helpers read Grafana and Prometheus from:
 
 ```bash
 MONITORING_NAMESPACE=vllm
