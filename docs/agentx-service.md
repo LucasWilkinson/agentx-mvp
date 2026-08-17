@@ -110,7 +110,7 @@ the configured results PVC and a ClusterQueue covering `cpu`, `memory`, and
 export NAMESPACE=vllm
 export AGENTX_OPERATOR_CONFIG=examples/operator-config.kimi-k3-a100.json
 export AGENTX_API_TOKEN='<generated secret value>'
-kubectl apply -n "$NAMESPACE" -f deploy/localqueue-a100-benchmark.yaml
+kubectl apply -n "$NAMESPACE" -f examples/localqueue.kimi-k3-a100.yaml
 just agentx-service-deploy
 kubectl -n "$NAMESPACE" get deploy,svc agentx-service
 kubectl -n "$NAMESPACE" get role agentx-service -o yaml
@@ -123,7 +123,7 @@ Readiness verifies PVC writes, Kubernetes access, active queues, Prometheus,
 and reconciler health. The deploy recipe creates the ClusterRoleBinding for
 the selected `NAMESPACE`; the static manifest contains no cluster namespace.
 Apply an environment-specific copy
-of `deploy/network-policy.example.yaml` only after replacing its documented
+of `examples/network-policy.agentx-service.yaml` only after replacing its documented
 selectors and API CIDR.
 
 ## Smoke and full requests
