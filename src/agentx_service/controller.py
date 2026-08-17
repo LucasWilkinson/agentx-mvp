@@ -80,7 +80,9 @@ class BenchmarkController:
         profile = self.config.monitoring_profiles.get(request.monitoring_profile)
         monitoring_status = None
         if target is not None and profile is not None:
-            monitoring_status = self.monitoring.preflight(target, profile)
+            monitoring_status = self.monitoring.preflight(
+                target, profile, request.served_model_name
+            )
         return plan_benchmark(request, self.config, observed, monitoring_status)
 
     def submit(self, request: BenchmarkRequest) -> BenchmarkRecord:
@@ -130,7 +132,10 @@ class BenchmarkController:
 
     def cancel(self, run_id: str) -> BenchmarkRecord:
         with self._run_lock(run_id):
-            return self._cancel(run_id)
+            record = self._cancel(run_id)
+        if record.state in TERMINAL_STATES:
+            self.enforce_retention()
+        return record
 
     def _cancel(self, run_id: str) -> BenchmarkRecord:
         record = self.get(run_id)
@@ -154,7 +159,6 @@ class BenchmarkController:
         if active is not None:
             return self._complete_cleanup(record, active)
         self._write_report(record)
-        self.enforce_retention()
         return record
 
     def reconstruct(self) -> list[BenchmarkRecord]:
@@ -169,7 +173,12 @@ class BenchmarkController:
 
     def reconcile(self, run_id: str) -> BenchmarkRecord:
         with self._run_lock(run_id):
-            return self._reconcile(run_id)
+            record = self._reconcile(run_id)
+        if record.state in TERMINAL_STATES and not any(
+            attempt.cleanup_pending for attempt in record.attempts
+        ):
+            self.enforce_retention()
+        return record
 
     def _reconcile(self, run_id: str) -> BenchmarkRecord:
         record = self.get(run_id)
@@ -261,7 +270,6 @@ class BenchmarkController:
         self.store.save(record)
         if record.state in TERMINAL_STATES:
             self._write_report(record)
-            self.enforce_retention()
         return record
 
     def reconcile_all(self) -> list[BenchmarkRecord]:
@@ -273,6 +281,10 @@ class BenchmarkController:
         ]
 
     def list_artifacts(self, run_id: str) -> dict[str, Any]:
+        with self._run_lock(run_id):
+            return self._list_artifacts(run_id)
+
+    def _list_artifacts(self, run_id: str) -> dict[str, Any]:
         record = self.get(run_id)
         run_root = self._run_root(record.run_id)
         values: list[dict[str, Any]] = []
@@ -335,9 +347,19 @@ class BenchmarkController:
         retained = [item for item in terminal if item.run_id not in expired]
         for record in retained[self.config.limits.maximum_retained_terminal_runs :]:
             expired.add(record.run_id)
+        deleted: list[str] = []
         for run_id in sorted(expired):
-            self.store.delete(run_id)
-        return sorted(expired)
+            with self._run_lock(run_id):
+                current = self.store.get(run_id)
+                if current is None:
+                    continue
+                if current.state not in TERMINAL_STATES or any(
+                    attempt.cleanup_pending for attempt in current.attempts
+                ):
+                    continue
+                self.store.delete(run_id)
+                deleted.append(run_id)
+        return deleted
 
     def get_report(self, run_id: str) -> dict[str, Any]:
         with self._run_lock(run_id):
@@ -369,6 +391,7 @@ class BenchmarkController:
         record.state = RunState.ADMISSION_PENDING
         record.updated_at = self.now()
         self.store.save(record)
+        attempt_directory.mkdir(parents=True, exist_ok=True)
         manifest = build_job_manifest(
             run_id=record.run_id,
             concurrency=concurrency,
@@ -399,6 +422,7 @@ class BenchmarkController:
                 "Job remained absent until the admission deadline after an uncertain submission",
             )
             return
+        Path(attempt.attempt_artifact_directory).mkdir(parents=True, exist_ok=True)
         manifest = build_job_manifest(
             run_id=record.run_id,
             concurrency=attempt.concurrency,
@@ -443,9 +467,17 @@ class BenchmarkController:
     ) -> BenchmarkRecord:
         queue = self.config.queues[record.request.local_queue]
         try:
-            self.backend.delete(queue.namespace, attempt.job_name)
+            cleanup_complete = self.backend.delete(queue.namespace, attempt.job_name)
         except Exception as error:  # noqa: BLE001 - cleanup is durably retryable.
             record.terminal_error = f"Job cleanup pending (will retry): {error}"
+            record.updated_at = self.now()
+            self.store.save(record)
+            return record
+
+        if not cleanup_complete:
+            record.terminal_error = (
+                "Job cleanup pending; waiting for Job and Pods to disappear"
+            )
             record.updated_at = self.now()
             self.store.save(record)
             return record
@@ -467,7 +499,6 @@ class BenchmarkController:
         self.store.save(record)
         if record.state in TERMINAL_STATES:
             self._write_report(record)
-            self.enforce_retention()
         return record
 
     def _persist_job_log(self, record: BenchmarkRecord, attempt: AttemptRecord) -> None:
@@ -586,6 +617,8 @@ class BenchmarkController:
                 "AIPerf profile is missing exact request/response measurement timestamps"
             )
         destination = Path(attempt.canonical_artifact_directory).resolve()
+        if root not in destination.parents:
+            raise RuntimeError("canonical artifact directory escaped the run root")
         temporary = destination.with_name(
             f".{destination.name}.promoting-{attempt.attempt}"
         )
@@ -603,11 +636,16 @@ class BenchmarkController:
                 raise RuntimeError(
                     "canonical artifacts lack a valid promotion marker"
                 ) from error
-            if existing_promotion != promotion:
+            if any(
+                existing_promotion.get(key) != value for key, value in promotion.items()
+            ):
                 raise RuntimeError(
                     "canonical artifacts exist but do not match this attempt"
                 )
+            existing_generated = existing_promotion.get("generated_hashes", {})
             for name, expected in source_hashes.items():
+                if name in existing_generated:
+                    continue
                 canonical_file = destination / name
                 if (
                     not canonical_file.is_file()
@@ -617,60 +655,108 @@ class BenchmarkController:
                     raise RuntimeError(
                         f"canonical artifact hash does not match promotion marker: {name}"
                     )
-        else:
+            if existing_promotion.get("promotion_complete") is True:
+                for name, expected in existing_generated.items():
+                    generated = destination / name
+                    if (
+                        not generated.is_file()
+                        or generated.is_symlink()
+                        or self._hash(generated) != expected
+                    ):
+                        raise RuntimeError(
+                            f"generated artifact hash does not match promotion marker: {name}"
+                        )
+                attempt.measurement_start = existing_promotion["measurement_start"]
+                attempt.measurement_end = existing_promotion["measurement_end"]
+                attempt.monitoring_provenance = existing_promotion.get(
+                    "monitoring_provenance", {}
+                )
+                attempt.monitoring_warnings = existing_promotion.get(
+                    "monitoring_warnings", []
+                )
+                attempt.artifact_hashes = self._bounded_artifact_hashes(destination)
+                return
+            # A marker written by the earlier, non-atomic promotion path belongs
+            # to this same attempt and can be rebuilt from the verified source.
+            shutil.rmtree(destination)
+
+        if temporary.exists():
+            shutil.rmtree(temporary)
+        temporary.parent.mkdir(parents=True, exist_ok=True)
+        monitoring_provenance: dict[str, Any] = {}
+        monitoring_warnings = list(attempt.monitoring_warnings)
+        try:
+            shutil.copytree(source, temporary)
+            for filename, label in (
+                ("server_metrics_export.json", "server metrics"),
+                ("gpu_telemetry_export.jsonl", "GPU telemetry"),
+            ):
+                if not (temporary / filename).is_file():
+                    monitoring_warnings.append(f"{label} artifact is missing")
+            profile_config = self.config.monitoring_profiles[
+                record.request.monitoring_profile
+            ]
+            try:
+                monitoring_provenance = self.monitoring.capture(
+                    profile_config, measurement_start, measurement_end, temporary
+                )
+            except Exception as error:  # noqa: BLE001 - benchmark data remains valid.
+                monitoring_warnings.append(f"Prometheus capture failed: {error}")
+            dashboard_summary = {
+                "run_id": record.run_id,
+                "concurrency": attempt.concurrency,
+                "attempt": attempt.attempt,
+                "measurement_start": measurement_start,
+                "measurement_end": measurement_end,
+                "interactivity_and_throughput": {
+                    key: self._bounded_metric(value)
+                    for key, value in profile.items()
+                    if any(
+                        token in key.lower()
+                        for token in (
+                            "throughput",
+                            "latency",
+                            "time_to",
+                            "inter_token",
+                            "request_duration",
+                        )
+                    )
+                    and self._bounded_metric(value) is not None
+                },
+                "monitoring": {
+                    "captured_at": monitoring_provenance.get("captured_at"),
+                    "query_names": monitoring_provenance.get("query_names", []),
+                },
+            }
+            write_dashboard(temporary, dashboard_summary)
+            generated_hashes = {
+                name: digest
+                for name, digest in self._bounded_artifact_hashes(temporary).items()
+                if source_hashes.get(name) != digest
+            }
+            completion = {
+                **promotion,
+                "promotion_complete": True,
+                "measurement_start": measurement_start,
+                "measurement_end": measurement_end,
+                "monitoring_provenance": monitoring_provenance,
+                "monitoring_warnings": monitoring_warnings,
+                "generated_hashes": generated_hashes,
+            }
+            (temporary / "agentx-promotion.json").write_text(
+                json.dumps(completion, indent=2) + "\n", encoding="utf-8"
+            )
+            artifact_hashes = self._bounded_artifact_hashes(temporary)
+            os.replace(temporary, destination)
+        except Exception:
             if temporary.exists():
                 shutil.rmtree(temporary)
-            temporary.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(source, temporary)
-            (temporary / "agentx-promotion.json").write_text(
-                json.dumps(promotion, indent=2) + "\n", encoding="utf-8"
-            )
-            os.replace(temporary, destination)
+            raise
         attempt.measurement_start = measurement_start
         attempt.measurement_end = measurement_end
-        for filename, label in (
-            ("server_metrics_export.json", "server metrics"),
-            ("gpu_telemetry_export.jsonl", "GPU telemetry"),
-        ):
-            if not (destination / filename).is_file():
-                attempt.monitoring_warnings.append(f"{label} artifact is missing")
-        profile_config = self.config.monitoring_profiles[
-            record.request.monitoring_profile
-        ]
-        try:
-            attempt.monitoring_provenance = self.monitoring.capture(
-                profile_config, measurement_start, measurement_end, destination
-            )
-        except Exception as error:  # noqa: BLE001 - benchmark data remains valid.
-            attempt.monitoring_warnings.append(f"Prometheus capture failed: {error}")
-        dashboard_summary = {
-            "run_id": record.run_id,
-            "concurrency": attempt.concurrency,
-            "attempt": attempt.attempt,
-            "measurement_start": measurement_start,
-            "measurement_end": measurement_end,
-            "interactivity_and_throughput": {
-                key: self._bounded_metric(value)
-                for key, value in profile.items()
-                if any(
-                    token in key.lower()
-                    for token in (
-                        "throughput",
-                        "latency",
-                        "time_to",
-                        "inter_token",
-                        "request_duration",
-                    )
-                )
-                and self._bounded_metric(value) is not None
-            },
-            "monitoring": {
-                "captured_at": attempt.monitoring_provenance.get("captured_at"),
-                "query_names": attempt.monitoring_provenance.get("query_names", []),
-            },
-        }
-        write_dashboard(destination, dashboard_summary)
-        attempt.artifact_hashes = self._bounded_artifact_hashes(destination)
+        attempt.monitoring_provenance = monitoring_provenance
+        attempt.monitoring_warnings = monitoring_warnings
+        attempt.artifact_hashes = artifact_hashes
 
     def _bounded_artifact_hashes(self, root: Path) -> dict[str, str]:
         hashes: dict[str, str] = {}

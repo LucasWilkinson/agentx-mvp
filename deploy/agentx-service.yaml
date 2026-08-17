@@ -74,14 +74,25 @@ spec:
         app.kubernetes.io/name: agentx-service
     spec:
       serviceAccountName: agentx-service
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
       containers:
         - name: service
           image: quay.io/tms/agentx-service:0.1.0
           imagePullPolicy: IfNotPresent
-          command: ["agentx-service", "serve"]
+          command: ["agentx-service"]
+          args: ["serve"]
           env:
             - name: AGENTX_OPERATOR_CONFIG
               value: /etc/agentx/operator-config.json
+            - name: HOME
+              value: /tmp
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
             - name: AGENTX_API_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -105,12 +116,15 @@ spec:
             allowPrivilegeEscalation: false
             capabilities: {drop: ["ALL"]}
             seccompProfile: {type: RuntimeDefault}
+            readOnlyRootFilesystem: true
           volumeMounts:
             - name: config
               mountPath: /etc/agentx
               readOnly: true
             - name: artifacts
               mountPath: /mnt/agentx
+            - name: temporary
+              mountPath: /tmp
       volumes:
         - name: config
           configMap:
@@ -118,3 +132,5 @@ spec:
         - name: artifacts
           persistentVolumeClaim:
             claimName: agentx-results
+        - name: temporary
+          emptyDir: {sizeLimit: 64Mi}

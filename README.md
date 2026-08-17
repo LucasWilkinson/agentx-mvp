@@ -57,6 +57,10 @@ The orchestrator image contains this harness at `/workspace/agentx-mvp` and
 `llm-manifesto` at `/workspace/llm-manifesto`; `just orchestrator-run` does not
 copy source trees into the pod. Build it with `just orchestrator-build`.
 
+The typed service has a separate, non-root runtime image. Build it with
+`just agentx-service-build`, publish it with `just agentx-service-push`, and
+select the deployed reference with `AGENTX_SERVICE_IMAGE`.
+
 ## Legacy model deployment helpers
 
 ```bash

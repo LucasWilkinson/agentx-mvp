@@ -11,7 +11,10 @@ from .models import MonitoringConfig, TargetConfig, utc_now
 
 class MonitoringBackend(Protocol):
     def preflight(
-        self, target: TargetConfig, profile: MonitoringConfig
+        self,
+        target: TargetConfig,
+        profile: MonitoringConfig,
+        served_model_name: str,
     ) -> dict[str, Any]: ...
 
     def capture(
@@ -118,7 +121,10 @@ class PrometheusMonitoring:
         }
 
     def preflight(
-        self, target: TargetConfig, profile: MonitoringConfig
+        self,
+        target: TargetConfig,
+        profile: MonitoringConfig,
+        served_model_name: str,
     ) -> dict[str, Any]:
         models = self._json(f"{target.endpoint_url}/models")
         served = {
@@ -126,9 +132,9 @@ class PrometheusMonitoring:
             for item in models.get("data", [])
             if isinstance(item, dict) and item.get("id")
         }
-        if not served.intersection(target.served_model_names):
+        if served_model_name not in served:
             raise RuntimeError(
-                "target health check did not advertise an allowed served model"
+                f"target health check did not advertise requested model: {served_model_name}"
             )
         server = self._validate_targets(
             self._query(profile, profile.server_up_query),

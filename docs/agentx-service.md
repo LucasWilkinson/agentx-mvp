@@ -35,8 +35,9 @@ Unknown fields are errors. The other tool schemas are:
 
 `plan_agentx_benchmark` reports queue/resource coverage, the effective target,
 Job and worst-case attempt counts, estimated deadline, durable destination,
-monitoring sources, and scenario validity without writing state or contacting
-Kubernetes.
+monitoring sources, and scenario validity without writing state or creating
+Kubernetes resources. Planning performs read-only LocalQueue and
+ClusterQueue inspection plus target and monitoring health checks.
 
 ## Operator configuration
 
@@ -74,6 +75,9 @@ both places. The PVC contains atomic state records, immutable attempt trees,
 canonical successful artifacts, and reports, so a replacement Pod reconstructs
 all non-terminal runs from Kubernetes. A persisted-but-missing Job is recreated
 idempotently; a transient observation error remains retryable.
+The controller mounts the PVC root, while each benchmark Job receives only its
+pre-created attempt directory through a Kubernetes `subPath`; workers cannot
+read or modify controller state, other attempts, canonical data, or reports.
 
 ## MCP contract
 
@@ -102,7 +106,9 @@ small durable error manifest. Artifact listings explicitly report truncation.
 
 ## Deploy
 
-Build `Dockerfile.orchestrator` with the image used by the Deployment; ensure
+Build the dedicated, non-root service image with `just agentx-service-build`
+(and publish it with `just agentx-service-push`); set `AGENTX_SERVICE_IMAGE` to
+the resulting reference. Ensure
 the configured results PVC and a ClusterQueue covering `cpu`, `memory`, and
 `ephemeral-storage` exist; inspect and apply the supplied LocalQueue; then:
 
@@ -167,15 +173,17 @@ valid, bounded AIPerf profile is atomically promoted. Existing canonical data
 is accepted only when its marker and recomputed hashes match the same attempt.
 Kueue Workload admission conditions are retained in pending/timeout errors.
 Job cleanup is persisted before deletion and completed after restart rather
-than rerunning a terminal attempt. A failed concurrency does not
-discard successful peers: the terminal state becomes `partial`. Cancellation
-deletes only the active owned Job and is idempotent.
+than rerunning a terminal attempt. Cleanup continues to count against active
+capacity until both the Job and its Pods are absent. A failed concurrency does
+not discard successful peers: the terminal state becomes `partial`.
+Cancellation deletes only the active owned Job and is idempotent.
 
 Reports contain AgentX scenario validity, interactivity/throughput metrics,
 every attempt and exact unpadded measurement window, vLLM image/fingerprint,
 live target-health and duplicate-scrape evidence, exact-window Prometheus
-exports, benchmark stdout, server/GPU telemetry provenance and warnings, the effective request/target/
-queue configuration, and SHA-256 artifact hashes. Existing
+exports, benchmark stdout, server/GPU telemetry provenance and warnings,
+effective request, target, and queue configuration, and SHA-256 artifact
+hashes. Existing
 `gen_interactivity_chart.py`, Grafana export, dashboard overlay, and report
 files remain unchanged and can operate on the canonical directories.
 

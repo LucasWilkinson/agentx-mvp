@@ -38,7 +38,7 @@ class JobObservation:
 class JobBackend(Protocol):
     def create(self, namespace: str, manifest: dict[str, Any]) -> None: ...
     def observe(self, namespace: str, name: str) -> JobObservation: ...
-    def delete(self, namespace: str, name: str) -> None: ...
+    def delete(self, namespace: str, name: str) -> bool: ...
     def list_owned(self, namespace: str) -> list[str]: ...
     def inspect_queue(self, namespace: str, name: str) -> QueueObservation: ...
     def logs(self, namespace: str, name: str, maximum_bytes: int) -> bytes: ...
@@ -129,7 +129,7 @@ exit \"$status\"
             {"name": "HOME", "value": "/workspace"},
             {"name": "XDG_CACHE_HOME", "value": "/workspace/.cache"},
             {"name": "HF_HOME", "value": "/workspace/.cache/huggingface"},
-            {"name": "ARTIFACT_DEST", "value": attempt_directory},
+            {"name": "ARTIFACT_DEST", "value": "/agentx-output"},
             {
                 "name": "ARTIFACT_MAX_FILES",
                 "value": str(config.limits.maximum_artifact_files),
@@ -157,7 +157,14 @@ exit \"$status\"
         },
         "volumeMounts": [
             {"name": "workspace", "mountPath": "/workspace"},
-            {"name": "artifacts", "mountPath": config.storage.mount_path},
+            {
+                "name": "artifacts",
+                "mountPath": "/agentx-output",
+                "subPath": (
+                    f"{config.storage.runs_subdirectory}/{run_id}/attempts/"
+                    f"c{concurrency}/a{attempt}"
+                ),
+            },
             {"name": "artifact-scratch", "mountPath": "/bounded-artifacts"},
         ],
     }
@@ -362,7 +369,7 @@ class KubectlBackend:
             return f"Kueue Workload for Job {job_name} has no admission condition yet"
         return "; ".join(details)[:2000]
 
-    def delete(self, namespace: str, name: str) -> None:
+    def delete(self, namespace: str, name: str) -> bool:
         self._run(
             [
                 "delete",
@@ -374,6 +381,31 @@ class KubectlBackend:
                 "--wait=false",
             ]
         )
+        job = self._run(
+            [
+                "get",
+                "job",
+                name,
+                "-n",
+                namespace,
+                "--ignore-not-found=true",
+                "-o",
+                "name",
+            ]
+        ).strip()
+        pods = self._run(
+            [
+                "get",
+                "pods",
+                "-n",
+                namespace,
+                "-l",
+                f"job-name={name}",
+                "-o",
+                "name",
+            ]
+        ).strip()
+        return not job and not pods
 
     def list_owned(self, namespace: str) -> list[str]:
         value = json.loads(

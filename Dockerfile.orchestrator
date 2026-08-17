@@ -24,7 +24,7 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
 
 # Python venv with networking niceties
 RUN uv venv /opt/venv \
-    && VIRTUAL_ENV=/opt/venv uv pip install requests httpx pyyaml rich pydantic hatchling
+    && VIRTUAL_ENV=/opt/venv uv pip install requests httpx pyyaml rich
 
 ENV VIRTUAL_ENV=/opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
@@ -32,8 +32,6 @@ ENV PATH="/opt/venv/bin:$PATH"
 WORKDIR /workspace
 
 COPY . /workspace/agentx-mvp
-
-RUN VIRTUAL_ENV=/opt/venv uv pip install --no-build-isolation /workspace/agentx-mvp
 
 RUN git clone --depth 1 "${MANIFESTO_REPO}" /workspace/llm-manifesto \
     && git -C /workspace/llm-manifesto fetch --depth 1 origin "${MANIFESTO_REF}" \

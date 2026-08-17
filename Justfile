@@ -30,6 +30,7 @@ lustre_claim := env_var_or_default('LUSTRE_CLAIM', 'lustre-pvc-vllm')
 lustre_mount := env_var_or_default('LUSTRE_MOUNT', '/mnt/lustre')
 lustre_prefix := env_var_or_default('LUSTRE_PREFIX', '/mnt/lustre/agentx-mvp')
 orchestrator_image := env_var_or_default('ORCHESTRATOR_IMAGE', 'quay.io/tms/benchmark-orchestrator:amd64')
+agentx_service_image := env_var_or_default('AGENTX_SERVICE_IMAGE', 'quay.io/tms/agentx-service:0.1.0')
 orchestrator_manifesto_repo := env_var_or_default('ORCHESTRATOR_MANIFESTO_REPO', 'https://github.com/tlrmchlsmth/llm-manifesto.git')
 orchestrator_manifesto_ref := env_var_or_default('ORCHESTRATOR_MANIFESTO_REF', 'main')
 orchestrator_deploy := "benchmark-orchestrator"
@@ -869,6 +870,13 @@ orchestrator-build:
       -f Dockerfile.orchestrator -t {{orchestrator_image}} .
     podman push {{orchestrator_image}}
 
+agentx-service-build:
+    podman build --platform linux/amd64 \
+      -f Dockerfile.agentx-service -t {{agentx_service_image}} .
+
+agentx-service-push: agentx-service-build
+    podman push {{agentx_service_image}}
+
 orchestrator-spec-config:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -941,6 +949,7 @@ agentx-service-deploy:
       --from-file=operator-config.json="{{agentx_operator_config}}" \
       --dry-run=client -o yaml | kubectl apply -n {{NAMESPACE}} -f -
     kubectl apply -n {{NAMESPACE}} -f deploy/agentx-service.yaml
+    kubectl set image -n {{NAMESPACE}} deploy/agentx-service service={{agentx_service_image}}
     kubectl create clusterrolebinding agentx-service-clusterqueue-reader-{{NAMESPACE}} \
       --clusterrole=agentx-service-clusterqueue-reader \
       --serviceaccount="{{NAMESPACE}}:agentx-service" \

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -39,6 +40,7 @@ class FakeBackend:
         self.observations = {}
         self.deleted = []
         self.delete_failures = {}
+        self.delete_pending = {}
         self.create_failure = None
 
     def create(self, namespace, manifest):
@@ -62,6 +64,11 @@ class FakeBackend:
         if failure is not None:
             raise failure
         self.deleted.append((namespace, name))
+        remaining = self.delete_pending.get(name, 0)
+        if remaining:
+            self.delete_pending[name] = remaining - 1
+            return False
+        return True
 
     def list_owned(self, namespace):
         return list(self.observations)
@@ -96,7 +103,7 @@ class FakeMonitoring:
     def __init__(self):
         self.fail_capture = False
 
-    def preflight(self, target, profile):
+    def preflight(self, target, profile, served_model_name):
         return {
             "target_models": list(target.served_model_names),
             "server_targets": {"expected": 1, "observed": 1},
@@ -237,21 +244,21 @@ class ServiceTests(unittest.TestCase):
         )
         deployment = (root / "deploy/agentx-service.yaml").read_text()
         justfile = (root / "Justfile").read_text()
+        service_dockerfile = (root / "Dockerfile.agentx-service").read_text()
         self.assertIn(f"claimName: {shipped.storage.pvc_name}", deployment)
         self.assertIn(f"mountPath: {shipped.storage.mount_path}", deployment)
         self.assertNotIn("lustre", deployment.lower())
         self.assertNotIn("namespace: vllm", deployment)
-        self.assertIn(
-            '--serviceaccount="{{NAMESPACE}}:agentx-service"', justfile
-        )
-        self.assertIn(
-            "agentx-service-clusterqueue-reader-{{NAMESPACE}}", justfile
-        )
+        self.assertIn('--serviceaccount="{{NAMESPACE}}:agentx-service"', justfile)
+        self.assertIn("agentx-service-clusterqueue-reader-{{NAMESPACE}}", justfile)
+        self.assertIn("agentx-service-build:", justfile)
+        self.assertIn("USER 10001:10001", service_dockerfile)
+        self.assertIn("readOnlyRootFilesystem: true", deployment)
 
     def write_artifacts(self, record, *, monitoring=True):
         attempt = record.attempts[-1]
         path = Path(attempt.attempt_artifact_directory)
-        path.mkdir(parents=True)
+        path.mkdir(parents=True, exist_ok=True)
         (path / "profile_export_aiperf.json").write_text(
             json.dumps(
                 {
@@ -376,10 +383,21 @@ class ServiceTests(unittest.TestCase):
         self.assertIn("/bounded-artifacts", container["args"][1])
         self.assertIn("ARTIFACT_MAX_FILES", container["args"][1])
         env = {item["name"]: item["value"] for item in container["env"]}
+        mounts = {item["name"]: item for item in container["volumeMounts"]}
         self.assertEqual(env["ARTIFACT_MAX_FILES"], "500")
+        self.assertEqual(env["ARTIFACT_DEST"], "/agentx-output")
         self.assertEqual(env["HOME"], "/workspace")
         self.assertEqual(env["XDG_CACHE_HOME"], "/workspace/.cache")
         self.assertEqual(env["HF_HOME"], "/workspace/.cache/huggingface")
+        self.assertEqual(mounts["artifacts"]["mountPath"], "/agentx-output")
+        self.assertEqual(
+            mounts["artifacts"]["subPath"],
+            f"runs/{'a' * 24}/attempts/c64/a1",
+        )
+        self.assertNotIn(
+            self.config.storage.mount_path,
+            {item["mountPath"] for item in mounts.values()},
+        )
         self.assertFalse(
             manifest["spec"]["template"]["spec"]["automountServiceAccountToken"]
         )
@@ -417,6 +435,20 @@ class ServiceTests(unittest.TestCase):
         Backend().create("bench", {"kind": "Job", "metadata": {"name": "job"}})
         self.assertEqual(calls[0][0], ["create", "-n", "bench", "-f", "-"])
         self.assertEqual(json.loads(calls[0][1])["metadata"]["name"], "job")
+
+    def test_kubectl_cleanup_waits_for_both_job_and_pods_to_disappear(self):
+        calls = []
+
+        class Backend(KubectlBackend):
+            def _run(self, args, *, stdin=None):
+                calls.append(args)
+                if args[:2] == ["get", "pods"]:
+                    return "pod/terminating\n"
+                return ""
+
+        self.assertFalse(Backend().delete("bench", "job"))
+        self.assertEqual(calls[0][:3], ["delete", "job", "job"])
+        self.assertIn(["get", "pods"], [call[:2] for call in calls])
 
     def test_shipped_rbac_is_limited_to_exercised_operations(self):
         root = Path(__file__).resolve().parents[1]
@@ -484,7 +516,7 @@ class ServiceTests(unittest.TestCase):
                                         "reason": "BackoffLimitExceeded",
                                         "message": "Job has reached the backoff limit",
                                     }
-                                ]
+                                ],
                             }
                         }
                     )
@@ -633,7 +665,9 @@ class ServiceTests(unittest.TestCase):
 
     def test_artifact_failure_retries_and_reports_actionable_error(self):
         record = self.controller.submit(request(retries=0))
-        Path(record.attempts[-1].attempt_artifact_directory).mkdir(parents=True)
+        Path(record.attempts[-1].attempt_artifact_directory).mkdir(
+            parents=True, exist_ok=True
+        )
         self.backend.observations[record.attempts[-1].job_name] = JobObservation(
             AttemptPhase.SUCCEEDED
         )
@@ -710,6 +744,21 @@ class ServiceTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "maximum active"):
             controller.submit(request(result_label="second"))
 
+    def test_cleanup_stays_pending_until_job_and_pods_are_absent(self):
+        limited = operator_config(self.temp.name, maximum_active_runs=1)
+        controller = BenchmarkController(
+            limited, self.backend, self.store, self.monitoring
+        )
+        record = controller.submit(request())
+        job = record.attempts[-1].job_name
+        self.backend.delete_pending[job] = 1
+        pending = controller.cancel(record.run_id)
+        self.assertTrue(pending.attempts[-1].cleanup_pending)
+        with self.assertRaisesRegex(RuntimeError, "maximum active"):
+            controller.submit(request(result_label="blocked"))
+        complete = controller.cancel(record.run_id)
+        self.assertFalse(complete.attempts[-1].cleanup_pending)
+
     def test_plan_fails_when_live_clusterqueue_is_inactive(self):
         observed = self.backend.inspect_queue("bench", "a100-benchmark")
         self.backend.inspect_queue = lambda _namespace, _name: QueueObservation(
@@ -717,6 +766,25 @@ class ServiceTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(PlanningError, "not Active"):
             self.controller.plan(request())
+
+    def test_monitoring_preflight_requires_the_requested_model(self):
+        value = self.config.model_dump(mode="json")
+        value["targets"]["kimi-k3-a100"]["served_model_names"].append("other/model")
+        configured = OperatorConfig.model_validate(value)
+        monitor = PrometheusMonitoring()
+        with (
+            patch.object(
+                monitor,
+                "_json",
+                return_value={"data": [{"id": "other/model"}]},
+            ),
+            self.assertRaisesRegex(RuntimeError, "requested model"),
+        ):
+            monitor.preflight(
+                configured.targets["kimi-k3-a100"],
+                configured.monitoring_profiles["full"],
+                "mgoin/Kimi-K3-pruned75",
+            )
 
     def test_plan_requires_one_flavor_with_sufficient_full_podset_quota(self):
         observed = self.backend.inspect_queue("bench", "a100-benchmark")
@@ -819,6 +887,57 @@ class ServiceTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "hash does not match"):
             self.controller._promote_artifacts(record, attempt)
 
+    def test_postprocessing_failure_does_not_poison_retry_promotion(self):
+        record = self.controller.submit(request(retries=1))
+        self.write_artifacts(record)
+        first = record.attempts[-1]
+        self.backend.observations[first.job_name] = JobObservation(
+            AttemptPhase.SUCCEEDED
+        )
+        with patch(
+            "agentx_service.controller.write_dashboard",
+            side_effect=OSError("transient dashboard write failure"),
+        ):
+            record = self.controller.reconcile(record.run_id)
+        self.assertFalse(Path(first.canonical_artifact_directory).exists())
+        self.assertEqual(len(record.attempts), 2)
+        self.write_artifacts(record)
+        second = record.attempts[-1]
+        self.backend.observations[second.job_name] = JobObservation(
+            AttemptPhase.SUCCEEDED
+        )
+        record = self.controller.reconcile(record.run_id)
+        self.assertEqual(record.state, RunState.COMPLETED)
+
+    def test_retention_waits_for_run_scoped_readers(self):
+        limited = operator_config(self.temp.name, maximum_retained_terminal_runs=1)
+        controller = BenchmarkController(
+            limited, self.backend, self.store, self.monitoring
+        )
+        first = controller.submit(request(result_label="first"))
+        with controller._run_lock(first.run_id):
+            first = controller._cancel(first.run_id)
+        time.sleep(0.002)
+        second = controller.submit(request(result_label="second"))
+        with controller._run_lock(second.run_id):
+            controller._cancel(second.run_id)
+
+        started = threading.Event()
+
+        def retain():
+            started.set()
+            controller.enforce_retention()
+
+        with controller._run_lock(first.run_id):
+            thread = threading.Thread(target=retain)
+            thread.start()
+            started.wait(timeout=1)
+            time.sleep(0.01)
+            self.assertIsNotNone(self.store.get(first.run_id))
+        thread.join(timeout=1)
+        self.assertFalse(thread.is_alive())
+        self.assertIsNone(self.store.get(first.run_id))
+
     def test_artifact_listing_reports_truncation(self):
         limited = operator_config(self.temp.name, maximum_artifact_files=10)
         controller = BenchmarkController(
@@ -826,7 +945,7 @@ class ServiceTests(unittest.TestCase):
         )
         record = controller.submit(request())
         path = Path(record.attempts[-1].attempt_artifact_directory)
-        path.mkdir(parents=True)
+        path.mkdir(parents=True, exist_ok=True)
         for index in range(12):
             (path / f"artifact-{index}.txt").write_text(str(index))
         listing = controller.list_artifacts(record.run_id)
