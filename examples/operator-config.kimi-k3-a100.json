@@ -1,0 +1,63 @@
+{
+  "service_namespace": "vllm",
+  "aiperf_image": "quay.io/tms/aiperf:agentx-v0",
+  "hf_token_secret_name": "aiperf-hf-token",
+  "max_context_length": 131072,
+  "targets": {
+    "kimi-k3-a100": {
+      "endpoint_url": "http://kimi-k3-inference-gateway.vllm.svc.cluster.local:80/v1",
+      "served_model_names": ["mgoin/Kimi-K3-pruned75"],
+      "allowed_queues": ["a100-benchmark"],
+      "model_revision": "3c8e22fdac0c14409eebd48ba78c10a940f5267a",
+      "vllm_image": "quay.io/tms/vllm-dev@sha256:ce1c2c5f7d2bd60bbfd9c4c02632183693e7b4242d3850017c6ff15077053381",
+      "vllm_fingerprint": null
+    }
+  },
+  "queues": {
+    "a100-benchmark": {
+      "namespace": "vllm",
+      "cpu_request": "4",
+      "cpu_limit": "16",
+      "memory_request": "8Gi",
+      "memory_limit": "32Gi",
+      "ephemeral_storage_request": "20Gi",
+      "ephemeral_storage_limit": "20Gi"
+    }
+  },
+  "monitoring_profiles": {
+    "full": {
+      "server_metrics_url": "http://kimi-k3-inference-gateway.vllm.svc.cluster.local:80/metrics",
+      "gpu_telemetry_urls": ["http://dcgm-exporter.nvidia-gpu-operator.svc.cluster.local:9400/metrics"],
+      "prometheus_url": "http://prometheus-server.vllm.svc.cluster.local:80",
+      "grafana_url": "http://grafana.vllm.svc.cluster.local:80",
+      "server_up_query": "up{namespace=\"vllm\",pod=~\"kimi-k3-.*\"}",
+      "gpu_up_query": "up{namespace=\"nvidia-gpu-operator\",job=~\".*dcgm.*\"}",
+      "expected_server_targets": 1,
+      "expected_gpu_targets": 1,
+      "capture_queries": {
+        "vllm-requests": "{__name__=~\"vllm:.*\",namespace=\"vllm\",pod=~\"kimi-k3-.*\"}",
+        "gpu-telemetry": "{__name__=~\"DCGM_.*\"}"
+      }
+    }
+  },
+  "storage": {
+    "pvc_name": "agentx-results",
+    "mount_path": "/mnt/agentx",
+    "runs_subdirectory": "runs"
+  },
+  "limits": {
+    "admission_timeout_seconds": 1800,
+    "runtime_grace_seconds": 1800,
+    "maximum_active_runs": 8,
+    "maximum_list_results": 100,
+    "maximum_mcp_result_bytes": 1048576,
+    "maximum_profile_bytes": 16777216,
+    "maximum_artifact_files": 500,
+    "maximum_artifact_file_bytes": 536870912,
+    "maximum_attempt_artifact_bytes": 2147483648,
+    "maximum_log_bytes": 16777216,
+    "maximum_retained_terminal_runs": 50,
+    "terminal_retention_seconds": 604800,
+    "scenario_valid_duration_seconds": 900
+  }
+}

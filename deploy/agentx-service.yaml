@@ -1,0 +1,136 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: agentx-service
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: agentx-service
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  - apiGroups: ["kueue.x-k8s.io"]
+    resources: ["localqueues"]
+    verbs: ["get"]
+  - apiGroups: ["kueue.x-k8s.io"]
+    resources: ["workloads"]
+    verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: agentx-service
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: agentx-service
+subjects:
+  - kind: ServiceAccount
+    name: agentx-service
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: agentx-service-clusterqueue-reader
+rules:
+  - apiGroups: ["kueue.x-k8s.io"]
+    resources: ["clusterqueues"]
+    verbs: ["get"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agentx-service
+spec:
+  selector:
+    app.kubernetes.io/name: agentx-service
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentx-service
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agentx-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: agentx-service
+    spec:
+      serviceAccountName: agentx-service
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+      containers:
+        - name: service
+          image: quay.io/tms/agentx-service:0.1.0
+          imagePullPolicy: IfNotPresent
+          command: ["agentx-service"]
+          args: ["serve"]
+          env:
+            - name: AGENTX_OPERATOR_CONFIG
+              value: /etc/agentx/operator-config.json
+            - name: HOME
+              value: /tmp
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: AGENTX_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: agentx-service-auth
+                  key: token
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 250m, memory: 256Mi}
+            limits: {cpu: "1", memory: 1Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+            seccompProfile: {type: RuntimeDefault}
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: config
+              mountPath: /etc/agentx
+              readOnly: true
+            - name: artifacts
+              mountPath: /mnt/agentx
+            - name: temporary
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: agentx-service-config
+        - name: artifacts
+          persistentVolumeClaim:
+            claimName: agentx-results
+        - name: temporary
+          emptyDir: {sizeLimit: 64Mi}

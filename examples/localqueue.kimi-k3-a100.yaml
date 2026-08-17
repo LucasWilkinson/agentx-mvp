@@ -1,0 +1,10 @@
+# Kimi K3 A100 example only. The operator must provision the referenced
+# ClusterQueue with CPU, memory, and ephemeral-storage quota before applying
+# this LocalQueue.
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  name: a100-benchmark
+  namespace: vllm
+spec:
+  clusterQueue: a100-benchmark

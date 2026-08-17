@@ -4,18 +4,21 @@ set export
 # AIPerf AgentX-MVP benchmark against a manifesto-managed llm-d deployment.
 #
 # Usage:
-#   just setup             # install Kueue objects and deploy the orchestrator
+#   just setup             # deploy the authenticated typed service
 #   just check             # confirm the model endpoint is reachable
-#   just run               # run the full AgentX-MVP benchmark as a Job
-#   just run 256 900       # override concurrency / duration
+#   just run               # submit the full strict request JSON
+#   just legacy-run 256 900 # old positional compatibility path
 #   just smoke             # fast plumbing test (~60s, marks result invalid)
-#   just orchestrator-run              # run a detached in-cluster sweep
-#   just logs / just shell # inspect the orchestrator
-#   just clean             # delete benchmark Jobs and the orchestrator
+#   just orchestrator-run  # submit through the durable in-cluster controller
+#   just logs / just shell # inspect the typed service
+#   just clean             # delete typed Jobs and service resources
 
 NAMESPACE := env_var_or_default('NAMESPACE', 'vllm')
 repo_root := justfile_directory()
 home := env_var_or_default('HOME', '')
+# Historical manifesto/Lustre defaults are used only by legacy-* compatibility
+# recipes. The typed service reads target, queue, monitoring, and storage values
+# from AGENTX_OPERATOR_CONFIG instead.
 manifesto_root := env_var_or_default('MANIFESTO_ROOT', home + '/code/llm-manifesto')
 manifesto_spec := env_var_or_default('MODEL_SPEC', 'models/deepseek-v4/3P-EP8-1D-EP8.yaml')
 manifesto_cluster := env_var_or_default('MANIFESTO_CLUSTER', 'clusters/oci-gb200.yaml')
@@ -27,6 +30,7 @@ lustre_claim := env_var_or_default('LUSTRE_CLAIM', 'lustre-pvc-vllm')
 lustre_mount := env_var_or_default('LUSTRE_MOUNT', '/mnt/lustre')
 lustre_prefix := env_var_or_default('LUSTRE_PREFIX', '/mnt/lustre/agentx-mvp')
 orchestrator_image := env_var_or_default('ORCHESTRATOR_IMAGE', 'quay.io/tms/benchmark-orchestrator:amd64')
+agentx_service_image := env_var_or_default('AGENTX_SERVICE_IMAGE', 'quay.io/tms/agentx-service:0.1.0')
 orchestrator_manifesto_repo := env_var_or_default('ORCHESTRATOR_MANIFESTO_REPO', 'https://github.com/tlrmchlsmth/llm-manifesto.git')
 orchestrator_manifesto_ref := env_var_or_default('ORCHESTRATOR_MANIFESTO_REF', 'main')
 orchestrator_deploy := "benchmark-orchestrator"
@@ -48,6 +52,8 @@ grafana_namespace := env_var_or_default('GRAFANA_NAMESPACE', monitoring_namespac
 grafana_service := env_var_or_default('GRAFANA_SERVICE', 'grafana')
 concurrency := "64"
 duration    := "900"
+agentx_operator_config := env_var_or_default('AGENTX_OPERATOR_CONFIG', 'examples/operator-config.kimi-k3-a100.json')
+agentx_request := env_var_or_default('AGENTX_REQUEST', 'examples/kimi-k3-a100-full.json')
 
 default:
     @just --list
@@ -65,8 +71,11 @@ run-dir duration=duration:
     spec="$(just --quiet _spec-slug)"
     printf 'results/%s_%s_%s_%ss\n' "$ts" "{{manifesto_user}}" "$spec" "{{duration}}"
 
-# Deploy the in-cluster orchestrator pod.
+# Deploy the durable typed AgentX service.
 deploy:
+    just agentx-service-deploy
+
+legacy-deploy:
     just orchestrator-deploy
 
 # Sanity check: list models served through the llm-d router from an in-cluster probe pod.
@@ -111,8 +120,14 @@ warmup:
         sleep 30
     done
 
-# Run the AgentX-MVP benchmark as a Kueue-managed Kubernetes Job.
-run concurrency=concurrency duration=duration dest="./results" attempt="1":
+# Run through the same typed planner/controller used by MCP. Set
+# AGENTX_OPERATOR_CONFIG and AGENTX_REQUEST to select operator/request JSON.
+run request=agentx_request:
+    just orchestrator-run "{{request}}"
+
+# Pre-service compatibility path. It preserves the old positional interface
+# while operators migrate automation to strict request JSON.
+legacy-run concurrency=concurrency duration=duration dest="./results" attempt="1":
     just _run-job {{concurrency}} {{duration}} "{{dest}}" "" {{attempt}}
 
 _run-job concurrency duration dest unsafe_args attempt:
@@ -328,30 +343,14 @@ _run-job concurrency duration dest unsafe_args attempt:
     fi
     kubectl delete -n "$NS" job "$JOB" --ignore-not-found=true
 
-# Fast plumbing validation. Uses --unsafe-override so it runs below the
-# scenario's 900s minimum; result is marked submission_valid: false.
-smoke concurrency="1" duration="60" dest="results_smoke":
-    just _run-job {{concurrency}} {{duration}} "{{dest}}" "--unsafe-override" 1
+# Fast typed plumbing validation. The service owns the fixed unsafe-override
+# flag and marks the report scenario-invalid.
+smoke request="examples/kimi-k3-a100-smoke.json":
+    just run "{{request}}"
 
-# End-to-end smoke workflow: run a small profile, copy artifacts, export the
-# Grafana dashboard, and build interactivity_vs_throughput.html.
-smoke-e2e dest="results_smoke" concurrency="1" duration="60":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    DEST="{{dest}}"
-    C="{{concurrency}}"
-    D="{{duration}}"
-    if [ -e "$DEST" ]; then
-        DEST="${DEST}_$(date -u +%Y%m%dT%H%M%SZ)"
-    fi
-    just smoke "$C" "$D" "$DEST"
-    just dump-logs "$DEST"
-    just report "$DEST" || true
-    just _smoke-interactivity "$DEST" "$C"
-    echo "=== Smoke artifacts: $DEST ==="
-    echo "  AIPerf:       $DEST/profile_export_aiperf.json"
-    echo "  Dashboard:    $DEST/dashboard.html"
-    echo "  Interactivity: $DEST/interactivity_vs_throughput.html"
+# End-to-end typed smoke; the controller persists logs, metrics, and dashboards.
+smoke-e2e request="examples/kimi-k3-a100-smoke.json":
+    just smoke "{{request}}"
 
 results dest="./results":
     @echo "AIPerf Jobs copy artifacts directly into the run directory; no runner pod copy is needed."
@@ -432,18 +431,35 @@ clear-kv-cache:
     done
     echo "All prefix caches reset (GPU + CPU + NVMe)."
 
-# Delete any leftover benchmark Jobs.
+# Delete Jobs owned by the typed service without touching durable PVC state.
 wipe:
+    kubectl delete job -n {{NAMESPACE}} -l app.kubernetes.io/managed-by=agentx-service --ignore-not-found=true
+
+legacy-wipe:
     kubectl delete job -n {{NAMESPACE}} -l app=agentx-aiperf --ignore-not-found=true
 
-logs:
+legacy-logs:
     kubectl logs -n {{NAMESPACE}} deploy/{{orchestrator_deploy}} -f
 
-shell:
+logs:
+    kubectl logs -n {{NAMESPACE}} deploy/agentx-service -f
+
+legacy-shell:
     kubectl exec -it -n {{NAMESPACE}} deploy/{{orchestrator_deploy}} -- bash
+
+shell:
+    kubectl exec -it -n {{NAMESPACE}} deploy/agentx-service -- /bin/sh
 
 clean:
     just wipe
+    kubectl delete deploy,service,role,rolebinding,serviceaccount -n {{NAMESPACE}} agentx-service --ignore-not-found=true
+    kubectl delete clusterrolebinding agentx-service-clusterqueue-reader-{{NAMESPACE}} --ignore-not-found=true
+    kubectl delete clusterrole agentx-service-clusterqueue-reader --ignore-not-found=true
+    kubectl delete configmap agentx-service-config -n {{NAMESPACE}} --ignore-not-found=true
+    kubectl delete secret agentx-service-auth -n {{NAMESPACE}} --ignore-not-found=true
+
+legacy-clean:
+    just legacy-wipe
     just orchestrator-clean
 
 # Capture vllm version info from a running deployment into a directory.
@@ -569,14 +585,18 @@ report outdir:
     python3 gen_interactivity_chart.py "{{outdir}}" 2>/dev/null || true
 
 
-# Install Kueue objects and deploy the benchmark orchestrator.
+# Deploy the typed service against operator-provisioned Kueue objects.
 setup:
-    just setup-kueue
-    just orchestrator-deploy
-    echo "=== Benchmark orchestrator ready in {{NAMESPACE}} ==="
+    just agentx-service-deploy
+    echo "=== AgentX benchmark service ready in {{NAMESPACE}} ==="
 
-# Install the same GB200 Kueue queue objects used by nightly-eval.
-setup-kueue:
+legacy-setup:
+    just legacy-setup-kueue
+    just orchestrator-deploy
+    echo "=== Legacy benchmark orchestrator ready in {{NAMESPACE}} ==="
+
+# Legacy GB200 queue setup retained only for historical sweeps.
+legacy-setup-kueue:
     kubectl apply -f kueue/resource-flavor.yaml
     kubectl apply -f kueue/cluster-queue.yaml
     kubectl apply -f kueue/local-queue.yaml -n {{NAMESPACE}}
@@ -717,7 +737,7 @@ stop-model:
         | uv run python "{{repo_root}}/inject_kueue_queue.py" --queue "{{kueue_queue}}" \
         | kubectl delete -n "{{NAMESPACE}}" -f - --ignore-not-found=true
 
-sweep-concurrency config_name dest="." duration="900":
+legacy-sweep-concurrency config_name dest="." duration="900":
     #!/usr/bin/env bash
     set -uo pipefail
     FAILED=""
@@ -741,12 +761,12 @@ sweep-concurrency config_name dest="." duration="900":
             fi
             just drain
             just clear-kv-cache
-            if just warmup && just run $C {{duration}} "$RDIR" "$attempt"; then
+            if just warmup && just legacy-run $C {{duration}} "$RDIR" "$attempt"; then
                 RUN_OK=true
                 break
             fi
             echo "Attempt $attempt/{{benchmark_retries}} failed for concurrency=$C"
-            just wipe 2>/dev/null || true
+            just legacy-wipe 2>/dev/null || true
             attempt=$((attempt + 1))
             if [ "$attempt" -le "{{benchmark_retries}}" ]; then
                 sleep 30
@@ -769,7 +789,7 @@ sweep-concurrency config_name dest="." duration="900":
         echo "Failed concurrency levels:${FAILED}"
     fi
 
-sweep outdir duration="900":
+legacy-sweep outdir duration="900":
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p "{{outdir}}"
@@ -813,8 +833,11 @@ sweep outdir duration="900":
         | uv run python "{{repo_root}}/inject_kueue_queue.py" --queue "{{kueue_queue}}" \
         > "$dir/manifest.yaml"
     just vllm-version "$dir"
-    just sweep-concurrency "$CONFIG_NAME" "$dir" {{duration}}
+    just legacy-sweep-concurrency "$CONFIG_NAME" "$dir" {{duration}}
     just stop-model
+
+sweep request=agentx_request:
+    just run "{{request}}"
 
 snapshot-prometheus ns dest:
     #!/usr/bin/env bash
@@ -847,6 +870,13 @@ orchestrator-build:
       -f Dockerfile.orchestrator -t {{orchestrator_image}} .
     podman push {{orchestrator_image}}
 
+agentx-service-build:
+    podman build --platform linux/amd64 \
+      -f Dockerfile.agentx-service -t {{agentx_service_image}} .
+
+agentx-service-push: agentx-service-build
+    podman push {{agentx_service_image}}
+
 orchestrator-spec-config:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -872,7 +902,7 @@ orchestrator-deploy:
     POD=$(kubectl get pod -n {{NAMESPACE}} -l app={{orchestrator_deploy}} -o jsonpath='{.items[0].metadata.name}')
     echo "Orchestrator pod ready: $POD"
 
-orchestrator-run outdir="" duration="900":
+legacy-orchestrator-run outdir="" duration="900":
     #!/usr/bin/env bash
     set -euo pipefail
     OUTDIR="{{outdir}}"
@@ -894,14 +924,45 @@ orchestrator-run outdir="" duration="900":
       MAX_CONTEXT_LENGTH="{{max_context_length}}" \
       SWEEP_OUTDIR="$OUTDIR" \
       SWEEP_DURATION="{{duration}}" \
-      bash -lc 'set -euo pipefail; set -a; [ -f /workspace/benchmark-sweep.env ] && . /workspace/benchmark-sweep.env; set +a; cd /workspace/agentx-mvp; rm -f /workspace/orchestrator-sweep.exit_code; : > /workspace/orchestrator-sweep.log; nohup bash -lc '"'"'just sweep "$SWEEP_OUTDIR" "$SWEEP_DURATION" > /workspace/orchestrator-sweep.log 2>&1; code=$?; echo "$code" > /workspace/orchestrator-sweep.exit_code; rm -f /workspace/orchestrator-sweep.pid; exit "$code"'"'"' </dev/null >/dev/null 2>&1 & pid=$!; echo "$pid" > /workspace/orchestrator-sweep.pid; echo "Launched PID $pid"'
+      bash -lc 'set -euo pipefail; set -a; [ -f /workspace/benchmark-sweep.env ] && . /workspace/benchmark-sweep.env; set +a; cd /workspace/agentx-mvp; rm -f /workspace/orchestrator-sweep.exit_code; : > /workspace/orchestrator-sweep.log; nohup bash -lc '"'"'just legacy-sweep "$SWEEP_OUTDIR" "$SWEEP_DURATION" > /workspace/orchestrator-sweep.log 2>&1; code=$?; echo "$code" > /workspace/orchestrator-sweep.exit_code; rm -f /workspace/orchestrator-sweep.pid; exit "$code"'"'"' </dev/null >/dev/null 2>&1 & pid=$!; echo "$pid" > /workspace/orchestrator-sweep.pid; echo "Launched PID $pid"'
     echo "Sweep running detached: $OUTDIR"
-    echo "Monitor: just orchestrator-logs"
+    echo "Monitor: just legacy-orchestrator-logs"
     echo "Copy results: just orchestrator-results $OUTDIR"
 
-orchestrator-logs:
+# Submit through the durable in-cluster service. The Deployment reconciler
+# continues the run after this command exits or the service Pod restarts.
+orchestrator-run request=agentx_request:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just agentx-service-deploy
+    kubectl exec -i -n {{NAMESPACE}} deploy/agentx-service -- \
+      agentx-service submit-http - < "{{request}}"
+
+agentx-service-deploy:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    : "${AGENTX_API_TOKEN:?set AGENTX_API_TOKEN before deploying}"
+    kubectl create secret generic agentx-service-auth -n {{NAMESPACE}} \
+      --from-literal=token="$AGENTX_API_TOKEN" \
+      --dry-run=client -o yaml | kubectl apply -n {{NAMESPACE}} -f -
+    kubectl create configmap agentx-service-config -n {{NAMESPACE}} \
+      --from-file=operator-config.json="{{agentx_operator_config}}" \
+      --dry-run=client -o yaml | kubectl apply -n {{NAMESPACE}} -f -
+    kubectl apply -n {{NAMESPACE}} -f deploy/agentx-service.yaml
+    kubectl set image -n {{NAMESPACE}} deploy/agentx-service service={{agentx_service_image}}
+    kubectl create clusterrolebinding agentx-service-clusterqueue-reader-{{NAMESPACE}} \
+      --clusterrole=agentx-service-clusterqueue-reader \
+      --serviceaccount="{{NAMESPACE}}:agentx-service" \
+      --dry-run=client -o yaml | kubectl apply -f -
+    kubectl rollout restart -n {{NAMESPACE}} deploy/agentx-service
+    kubectl rollout status -n {{NAMESPACE}} deploy/agentx-service --timeout=300s
+
+legacy-orchestrator-logs:
     POD=$(kubectl get pod -n {{NAMESPACE}} -l app={{orchestrator_deploy}} -o jsonpath='{.items[0].metadata.name}')
     kubectl exec -n {{NAMESPACE}} "$POD" -- tail -f /workspace/orchestrator-sweep.log
+
+orchestrator-logs:
+    kubectl logs -n {{NAMESPACE}} deploy/agentx-service -f
 
 orchestrator-results outdir:
     #!/usr/bin/env bash
