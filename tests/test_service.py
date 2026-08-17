@@ -1,22 +1,35 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from pydantic import ValidationError
 
-from agentx_service.backend import JobObservation, build_job_manifest
+from agentx_service.backend import (
+    JobNotFound,
+    JobObservation,
+    KubectlBackend,
+    QueueObservation,
+    build_job_manifest,
+)
+from agentx_service.cli import _submit_http
 from agentx_service.controller import BenchmarkController
 from agentx_service.mcp import PROTOCOL_VERSION, AgentXMcp
 from agentx_service.models import (
     AttemptPhase,
+    AttemptRecord,
     BenchmarkRequest,
     OperatorConfig,
     RunState,
 )
+from agentx_service.monitoring import PrometheusMonitoring
 from agentx_service.planner import PlanningError, plan_benchmark
+from agentx_service.server import authorized
 from agentx_service.store import FileRunStore
 
 
@@ -25,12 +38,18 @@ class FakeBackend:
         self.manifests = []
         self.observations = {}
         self.deleted = []
+        self.delete_failures = {}
+        self.create_failure = None
 
     def create(self, namespace, manifest):
         self.manifests.append((namespace, manifest))
         self.observations.setdefault(
             manifest["metadata"]["name"], JobObservation(AttemptPhase.ADMISSION_PENDING)
         )
+        if self.create_failure is not None:
+            failure = self.create_failure
+            self.create_failure = None
+            raise failure
 
     def observe(self, namespace, name):
         value = self.observations[name]
@@ -39,10 +58,67 @@ class FakeBackend:
         return value
 
     def delete(self, namespace, name):
+        failure = self.delete_failures.pop(name, None)
+        if failure is not None:
+            raise failure
         self.deleted.append((namespace, name))
 
     def list_owned(self, namespace):
         return list(self.observations)
+
+    def inspect_queue(self, namespace, name):
+        return QueueObservation(
+            local_queue=name,
+            namespace=namespace,
+            cluster_queue="a100-benchmark",
+            active=True,
+            covered_resources=("cpu", "ephemeral-storage", "memory"),
+            flavors_by_resource={
+                "cpu": ("a100",),
+                "memory": ("a100",),
+                "ephemeral-storage": ("a100",),
+            },
+            nominal_quota_by_resource={
+                "cpu": ("128",),
+                "memory": ("1Ti",),
+                "ephemeral-storage": ("1Ti",),
+            },
+        )
+
+    def logs(self, namespace, name, maximum_bytes):
+        return b"aiperf completed\n"[:maximum_bytes]
+
+    def ready(self, namespace):
+        return {"kubernetes": "ok", "namespace": namespace}
+
+
+class FakeMonitoring:
+    def __init__(self):
+        self.fail_capture = False
+
+    def preflight(self, target, profile):
+        return {
+            "target_models": list(target.served_model_names),
+            "server_targets": {"expected": 1, "observed": 1},
+            "gpu_targets": {"expected": 1, "observed": 1},
+        }
+
+    def capture(self, profile, start, end, destination):
+        if self.fail_capture:
+            raise RuntimeError("Prometheus unavailable")
+        value = {"exact_window": {"start": start, "end": end}, "queries": {}}
+        (destination / "prometheus_export.json").write_text(json.dumps(value))
+        return value
+
+    def ready(self, profile):
+        return {"prometheus": "ok"}
+
+    def warmup(self, target, served_model_name):
+        return {
+            "started_at": "2026-08-17T00:00:00Z",
+            "completed_at": "2026-08-17T00:00:01Z",
+            "system_fingerprint": "fp-warmup",
+        }
 
 
 def operator_config(root: str, **limit_overrides) -> OperatorConfig:
@@ -57,6 +133,7 @@ def operator_config(root: str, **limit_overrides) -> OperatorConfig:
     }
     return OperatorConfig.model_validate(
         {
+            "service_namespace": "bench",
             "aiperf_image": "registry.test/aiperf:fixed",
             "hf_token_secret_name": "hf-token",
             "max_context_length": 131072,
@@ -77,8 +154,8 @@ def operator_config(root: str, **limit_overrides) -> OperatorConfig:
                     "cpu_limit": "16",
                     "memory_request": "8Gi",
                     "memory_limit": "32Gi",
+                    "ephemeral_storage_request": "20Gi",
                     "ephemeral_storage_limit": "20Gi",
-                    "covered_resources": ["cpu", "memory"],
                 }
             },
             "monitoring_profiles": {
@@ -89,6 +166,11 @@ def operator_config(root: str, **limit_overrides) -> OperatorConfig:
                     ],
                     "prometheus_url": "http://prometheus.monitoring.svc.cluster.local",
                     "grafana_url": "http://grafana.monitoring.svc.cluster.local",
+                    "server_up_query": 'up{job="vllm"}',
+                    "gpu_up_query": 'up{job="dcgm"}',
+                    "expected_server_targets": 1,
+                    "expected_gpu_targets": 1,
+                    "capture_queries": {"vllm": "vllm:num_requests_running"},
                 }
             },
             "storage": {
@@ -139,11 +221,23 @@ class ServiceTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.config = operator_config(self.temp.name)
         self.backend = FakeBackend()
+        self.monitoring = FakeMonitoring()
         self.store = FileRunStore(Path(self.temp.name) / "runs")
-        self.controller = BenchmarkController(self.config, self.backend, self.store)
+        self.controller = BenchmarkController(
+            self.config, self.backend, self.store, self.monitoring
+        )
 
     def tearDown(self):
         self.temp.cleanup()
+
+    def test_shipped_kimi_config_matches_deployment_storage(self):
+        root = Path(__file__).resolve().parents[1]
+        shipped = OperatorConfig.model_validate_json(
+            (root / "examples/operator-config.kimi-k3-a100.json").read_text()
+        )
+        deployment = (root / "deploy/agentx-service.yaml").read_text()
+        self.assertIn(f"claimName: {shipped.storage.pvc_name}", deployment)
+        self.assertIn(f"mountPath: {shipped.storage.mount_path}", deployment)
 
     def write_artifacts(self, record, *, monitoring=True):
         attempt = record.attempts[-1]
@@ -183,8 +277,51 @@ class ServiceTests(unittest.TestCase):
                 }
             )
 
+    def test_operator_config_rejects_cross_namespace_queues(self):
+        value = self.config.model_dump(mode="json")
+        value["service_namespace"] = "other"
+        with self.assertRaisesRegex(ValidationError, "service_namespace"):
+            OperatorConfig.model_validate(value)
+
+    def test_operator_config_requires_digest_pinned_vllm_image(self):
+        value = self.config.model_dump(mode="json")
+        value["targets"]["kimi-k3-a100"]["vllm_image"] = (
+            "quay.io/vllm/vllm-openai:latest"
+        )
+        with self.assertRaisesRegex(ValidationError, "vllm_image"):
+            OperatorConfig.model_validate(value)
+
+    def test_monitoring_preflight_rejects_duplicate_unhealthy_or_unidentified_targets(
+        self,
+    ):
+        def result(*items):
+            return {"data": {"result": list(items)}}
+
+        healthy = {
+            "metric": {"pod": "server-0", "endpoint": "metrics"},
+            "value": [1, "1"],
+        }
+        self.assertEqual(
+            PrometheusMonitoring._validate_targets(result(healthy), 1, "server")[
+                "observed"
+            ],
+            1,
+        )
+        with self.assertRaisesRegex(RuntimeError, "duplicates"):
+            PrometheusMonitoring._validate_targets(
+                result(healthy, healthy), 2, "server"
+            )
+        with self.assertRaisesRegex(RuntimeError, "unhealthy"):
+            PrometheusMonitoring._validate_targets(
+                result({**healthy, "value": [1, "0"]}), 1, "server"
+            )
+        with self.assertRaisesRegex(RuntimeError, "unidentified"):
+            PrometheusMonitoring._validate_targets(
+                result({"metric": {}, "value": [1, "1"]}), 1, "server"
+            )
+
     def test_plan_is_non_mutating_and_shows_required_fields(self):
-        plan = plan_benchmark(request(concurrencies=[1, 64]), self.config)
+        plan = self.controller.plan(request(concurrencies=[1, 64]))
         self.assertFalse(plan.mutates_state)
         self.assertEqual(plan.job_count, 2)
         self.assertEqual(plan.maximum_attempt_count, 4)
@@ -195,13 +332,15 @@ class ServiceTests(unittest.TestCase):
 
     def test_plan_rejects_unknown_target_queue_model_and_missing_coverage(self):
         with self.assertRaises(PlanningError):
-            plan_benchmark(request(local_queue="other"), self.config)
+            self.controller.plan(request(local_queue="other"))
         with self.assertRaises(PlanningError):
-            plan_benchmark(request(served_model_name="attacker/model"), self.config)
-        broken = self.config.model_copy(deep=True)
-        broken.queues["a100-benchmark"].covered_resources = ["cpu"]
+            self.controller.plan(request(served_model_name="attacker/model"))
+        observed = self.backend.inspect_queue("bench", "a100-benchmark")
+        broken = QueueObservation(
+            **{**observed.__dict__, "covered_resources": ("cpu", "ephemeral-storage")}
+        )
         with self.assertRaisesRegex(PlanningError, "memory"):
-            plan_benchmark(request(), broken)
+            plan_benchmark(request(), self.config, broken)
 
     def test_job_is_kueue_gated_cpu_only_and_has_fixed_argv(self):
         manifest = build_job_manifest(
@@ -218,10 +357,67 @@ class ServiceTests(unittest.TestCase):
             "a100-benchmark",
         )
         container = manifest["spec"]["template"]["spec"]["containers"][0]
-        self.assertEqual(container["command"], ["/opt/venv/bin/aiperf"])
+        self.assertEqual(container["command"], ["/bin/bash"])
         self.assertNotIn("nvidia.com/gpu", json.dumps(container["resources"]))
-        self.assertNotIn("bash", json.dumps(container))
+        self.assertEqual(
+            container["resources"]["requests"]["ephemeral-storage"], "20Gi"
+        )
         self.assertIn("--unsafe-override", container["args"])
+        self.assertNotIn("rm ", container["args"][1])
+        self.assertIn("/bounded-artifacts", container["args"][1])
+        self.assertIn("ARTIFACT_MAX_FILES", container["args"][1])
+        env = {item["name"]: item["value"] for item in container["env"]}
+        self.assertEqual(env["ARTIFACT_MAX_FILES"], "500")
+        self.assertFalse(
+            manifest["spec"]["template"]["spec"]["automountServiceAccountToken"]
+        )
+
+    def test_kubectl_log_capture_streams_with_a_server_side_byte_limit(self):
+        read_fd, write_fd = os.pipe()
+        os.write(write_fd, b"x" * 128)
+        os.close(write_fd)
+
+        class Process:
+            stdout = os.fdopen(read_fd, "rb", buffering=0)
+
+            def kill(self):
+                pass
+
+            def wait(self, timeout=None):
+                return 0
+
+        with patch(
+            "agentx_service.backend.subprocess.Popen", return_value=Process()
+        ) as popen:
+            value = KubectlBackend().logs("bench", "job", 64)
+        self.assertLessEqual(len(value), 64)
+        self.assertIn(b"truncated", value)
+        self.assertIn("--limit-bytes=64", popen.call_args.args[0])
+
+    def test_kueue_workload_conditions_are_returned_as_admission_diagnostics(self):
+        class Backend(KubectlBackend):
+            def _run(self, args, *, stdin=None):
+                return json.dumps(
+                    {
+                        "items": [
+                            {
+                                "status": {
+                                    "conditions": [
+                                        {
+                                            "type": "QuotaReserved",
+                                            "status": "False",
+                                            "reason": "Pending",
+                                            "message": "insufficient a100 flavor quota",
+                                        }
+                                    ]
+                                }
+                            }
+                        ]
+                    }
+                )
+
+        detail = Backend()._workload_diagnostic("bench", "job", "uid")
+        self.assertIn("insufficient a100 flavor quota", detail)
 
     def test_admission_and_runtime_are_distinct(self):
         record = self.controller.submit(request())
@@ -238,6 +434,17 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(
             self.controller.reconcile(record.run_id).state, RunState.RUNNING
         )
+
+    def test_ambiguous_job_create_reconciles_same_deterministic_attempt(self):
+        self.backend.create_failure = RuntimeError("kubectl timed out after send")
+        record = self.controller.submit(request())
+        self.assertEqual(len(record.attempts), 1)
+        self.assertEqual(len(self.backend.manifests), 1)
+        self.assertIn("uncertain", record.terminal_error)
+        reconciled = self.controller.reconcile(record.run_id)
+        self.assertEqual(len(reconciled.attempts), 1)
+        self.assertEqual(len(self.backend.manifests), 1)
+        self.assertEqual(reconciled.state, RunState.ADMISSION_PENDING)
 
     def test_retry_then_success_promotes_artifacts_and_exact_window(self):
         record = self.controller.submit(request(retries=1))
@@ -259,6 +466,37 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(successful.measurement_start, "2023-11-14T22:13:20.000Z")
         self.assertEqual(successful.measurement_end, "2023-11-14T22:14:20.000Z")
         self.assertIn("profile_export_aiperf.json", successful.artifact_hashes)
+        dashboard = Path(successful.canonical_artifact_directory) / "dashboard.html"
+        self.assertIn("request_throughput", dashboard.read_text())
+        sweep = (
+            Path(self.temp.name)
+            / "runs"
+            / record.run_id
+            / "interactivity_vs_throughput.html"
+        )
+        self.assertIn("const points=", sweep.read_text())
+        report = self.controller.get_report(record.run_id)
+        self.assertEqual(report["vllm"]["fingerprint"], "fp-runtime")
+        self.assertEqual(report["vllm"]["fingerprint_source"], "aiperf")
+
+    def test_runtime_fingerprint_source_wins_even_when_operator_value_matches(self):
+        value = self.config.model_dump(mode="json")
+        value["targets"]["kimi-k3-a100"]["vllm_fingerprint"] = "fp-runtime"
+        controller = BenchmarkController(
+            OperatorConfig.model_validate(value),
+            self.backend,
+            self.store,
+            self.monitoring,
+        )
+        record = controller.submit(request())
+        self.write_artifacts(record)
+        self.backend.observations[record.attempts[-1].job_name] = JobObservation(
+            AttemptPhase.SUCCEEDED
+        )
+        record = controller.reconcile(record.run_id)
+        report = controller.get_report(record.run_id)
+        self.assertEqual(report["vllm"]["fingerprint"], "fp-runtime")
+        self.assertEqual(report["vllm"]["fingerprint_source"], "aiperf")
 
     def test_partial_sweep_continues_after_terminal_concurrency_failure(self):
         record = self.controller.submit(request(concurrencies=[1, 2], retries=0))
@@ -300,9 +538,83 @@ class ServiceTests(unittest.TestCase):
         self.backend.observations[job] = JobObservation(
             AttemptPhase.RUNNING, started_at="2026-08-17T00:00:00Z"
         )
-        restarted = BenchmarkController(self.config, self.backend, self.store)
+        restarted = BenchmarkController(
+            self.config, self.backend, self.store, self.monitoring
+        )
         recovered = restarted.reconstruct()
         self.assertEqual(recovered[0].state, RunState.RUNNING)
+
+    def test_restart_recreates_a_persisted_missing_job(self):
+        record = self.controller.submit(request())
+        job = record.attempts[-1].job_name
+        self.backend.observations[job] = JobNotFound("deleted")
+        manifests_before = len(self.backend.manifests)
+        recovered = self.controller.reconstruct()[0]
+        self.assertEqual(recovered.state, RunState.ADMISSION_PENDING)
+        self.assertEqual(len(self.backend.manifests), manifests_before + 1)
+        self.assertIn("reconstructed", recovered.terminal_error)
+
+    def test_restart_finishes_persisted_success_cleanup_without_rerunning(self):
+        record = self.controller.submit(request())
+        self.write_artifacts(record)
+        job = record.attempts[-1].job_name
+        self.backend.observations[job] = JobObservation(AttemptPhase.SUCCEEDED)
+        self.backend.delete_failures[job] = RuntimeError("API unavailable")
+        pending = self.controller.reconcile(record.run_id)
+        self.assertTrue(pending.attempts[-1].cleanup_pending)
+        manifests = len(self.backend.manifests)
+        recovered = self.controller.reconstruct()[0]
+        self.assertEqual(recovered.state, RunState.COMPLETED)
+        self.assertFalse(recovered.attempts[-1].cleanup_pending)
+        self.assertEqual(len(self.backend.manifests), manifests)
+
+    def test_restart_finishes_persisted_cancel_cleanup_without_rerunning(self):
+        record = self.controller.submit(request())
+        job = record.attempts[-1].job_name
+        self.backend.delete_failures[job] = RuntimeError("API unavailable")
+        pending = self.controller.cancel(record.run_id)
+        self.assertTrue(pending.attempts[-1].cleanup_pending)
+        manifests = len(self.backend.manifests)
+        recovered = self.controller.reconstruct()[0]
+        self.assertEqual(recovered.state, RunState.CANCELED)
+        self.assertFalse(recovered.attempts[-1].cleanup_pending)
+        self.assertEqual(len(self.backend.manifests), manifests)
+
+    def test_cleanup_pending_cancellation_counts_against_active_capacity(self):
+        limited = operator_config(self.temp.name, maximum_active_runs=1)
+        controller = BenchmarkController(
+            limited, self.backend, self.store, self.monitoring
+        )
+        record = controller.submit(request())
+        job = record.attempts[-1].job_name
+        self.backend.delete_failures[job] = RuntimeError("API unavailable")
+        pending = controller.cancel(record.run_id)
+        self.assertTrue(pending.attempts[-1].cleanup_pending)
+        with self.assertRaisesRegex(RuntimeError, "maximum active"):
+            controller.submit(request(result_label="second"))
+
+    def test_plan_fails_when_live_clusterqueue_is_inactive(self):
+        observed = self.backend.inspect_queue("bench", "a100-benchmark")
+        self.backend.inspect_queue = lambda _namespace, _name: QueueObservation(
+            **{**observed.__dict__, "active": False}
+        )
+        with self.assertRaisesRegex(PlanningError, "not Active"):
+            self.controller.plan(request())
+
+    def test_plan_requires_one_flavor_with_sufficient_full_podset_quota(self):
+        observed = self.backend.inspect_queue("bench", "a100-benchmark")
+        insufficient = QueueObservation(
+            **{
+                **observed.__dict__,
+                "nominal_quota_by_resource": {
+                    **observed.nominal_quota_by_resource,
+                    "ephemeral-storage": ("1Gi",),
+                },
+            }
+        )
+        self.backend.inspect_queue = lambda _namespace, _name: insufficient
+        with self.assertRaisesRegex(PlanningError, "full PodSet"):
+            self.controller.plan(request())
 
     def test_monitoring_failures_are_visible_without_losing_results(self):
         record = self.controller.submit(request())
@@ -315,6 +627,113 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(record.state, RunState.COMPLETED)
         self.assertEqual(len(report["monitoring_provenance"]["warnings"]), 2)
         self.assertEqual(report["per_concurrency"][0]["vllm_fingerprint"], "fp-runtime")
+
+    def test_prometheus_capture_failure_is_a_durable_warning(self):
+        record = self.controller.submit(request())
+        self.write_artifacts(record)
+        self.monitoring.fail_capture = True
+        self.backend.observations[record.attempts[-1].job_name] = JobObservation(
+            AttemptPhase.SUCCEEDED
+        )
+        record = self.controller.reconcile(record.run_id)
+        self.assertEqual(record.state, RunState.COMPLETED)
+        self.assertTrue(
+            any(
+                "Prometheus capture failed" in item
+                for item in record.attempts[-1].monitoring_warnings
+            )
+        )
+
+    def test_oversized_artifacts_are_removed_and_attempt_fails(self):
+        limited = operator_config(
+            self.temp.name,
+            maximum_artifact_file_bytes=1024,
+            maximum_attempt_artifact_bytes=4096,
+        )
+        controller = BenchmarkController(
+            limited, self.backend, self.store, self.monitoring
+        )
+        record = controller.submit(request(retries=0))
+        self.write_artifacts(record)
+        path = Path(record.attempts[-1].attempt_artifact_directory)
+        (path / "huge.log").write_bytes(b"x" * 2048)
+        self.backend.observations[record.attempts[-1].job_name] = JobObservation(
+            AttemptPhase.SUCCEEDED
+        )
+        record = controller.reconcile(record.run_id)
+        self.assertEqual(record.state, RunState.FAILED)
+        self.assertTrue((path / "artifact-limit-error.json").is_file())
+        self.assertFalse((path / "huge.log").exists())
+
+    def test_canonical_promotion_rejects_artifacts_from_a_different_retry(self):
+        record = self.controller.submit(request())
+        self.write_artifacts(record)
+        first = record.attempts[-1]
+        self.controller._promote_artifacts(record, first)
+        second_path = Path(first.attempt_artifact_directory).with_name("a2")
+        second_path.mkdir(parents=True)
+        profile = json.loads(
+            (
+                Path(first.attempt_artifact_directory) / "profile_export_aiperf.json"
+            ).read_text()
+        )
+        (second_path / "profile_export_aiperf.json").write_text(json.dumps(profile))
+        (second_path / "vllm_fingerprint.txt").write_text("fp-runtime\n")
+        (second_path / "server_metrics_export.json").write_text("{}")
+        (second_path / "gpu_telemetry_export.jsonl").write_text("{}\n")
+        second = AttemptRecord(
+            concurrency=first.concurrency,
+            attempt=2,
+            job_name="agentx-retry",
+            submitted_at=first.submitted_at,
+            attempt_artifact_directory=str(second_path),
+            canonical_artifact_directory=first.canonical_artifact_directory,
+        )
+        with self.assertRaisesRegex(RuntimeError, "do not match"):
+            self.controller._promote_artifacts(record, second)
+
+    def test_canonical_promotion_rehashes_existing_files(self):
+        record = self.controller.submit(request())
+        self.write_artifacts(record)
+        attempt = record.attempts[-1]
+        self.controller._promote_artifacts(record, attempt)
+        canonical = Path(attempt.canonical_artifact_directory)
+        (canonical / "profile_export_aiperf.json").write_text("{}")
+        with self.assertRaisesRegex(RuntimeError, "hash does not match"):
+            self.controller._promote_artifacts(record, attempt)
+
+    def test_artifact_listing_reports_truncation(self):
+        limited = operator_config(self.temp.name, maximum_artifact_files=10)
+        controller = BenchmarkController(
+            limited, self.backend, self.store, self.monitoring
+        )
+        record = controller.submit(request())
+        path = Path(record.attempts[-1].attempt_artifact_directory)
+        path.mkdir(parents=True)
+        for index in range(12):
+            (path / f"artifact-{index}.txt").write_text(str(index))
+        listing = controller.list_artifacts(record.run_id)
+        self.assertTrue(listing["truncated"])
+        self.assertEqual(listing["total_files"], 12)
+        self.assertEqual(len(listing["artifacts"]), 10)
+
+    def test_readiness_checks_storage_kubernetes_queue_and_monitoring(self):
+        detail = self.controller.readiness()
+        self.assertEqual(detail["storage"], "writable")
+        self.assertEqual(detail["kubernetes"], "ok")
+        self.assertTrue(detail["queues"]["a100-benchmark"])
+        self.assertEqual(detail["prometheus"], "ok")
+
+    def test_terminal_run_retention_removes_oldest_state_and_artifacts(self):
+        limited = operator_config(self.temp.name, maximum_retained_terminal_runs=1)
+        controller = BenchmarkController(
+            limited, self.backend, self.store, self.monitoring
+        )
+        first = controller.cancel(controller.submit(request()).run_id)
+        time.sleep(0.002)
+        second = controller.cancel(controller.submit(request()).run_id)
+        self.assertIsNone(self.store.get(first.run_id))
+        self.assertIsNotNone(self.store.get(second.run_id))
 
     def test_mcp_is_stateless_strict_bounded_and_correctly_annotated(self):
         mcp = AgentXMcp(self.controller)
@@ -353,6 +772,70 @@ class ServiceTests(unittest.TestCase):
         headers, body = mcp_message("tools/list", version="2025-06-18")
         self.assertEqual(mcp.handle(headers, body)[1]["error"]["code"], -32022)
 
+    def test_http_bearer_authentication_fails_closed(self):
+        self.assertTrue(authorized("Bearer secret", "secret"))
+        self.assertFalse(authorized(None, "secret"))
+        self.assertFalse(authorized("Bearer wrong", "secret"))
+
+    def test_public_cli_submission_routes_through_authenticated_mcp(self):
+        request_path = Path(self.temp.name) / "request.json"
+        request_path.write_text(request().model_dump_json())
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, _maximum):
+                return b'{"jsonrpc":"2.0","id":1,"result":{}}'
+
+        with (
+            patch.dict(os.environ, {"AGENTX_API_TOKEN": "secret"}),
+            patch("agentx_service.cli.urlopen", return_value=Response()) as urlopen,
+            patch("builtins.print"),
+        ):
+            self.assertEqual(_submit_http(str(request_path)), 0)
+        outbound = urlopen.call_args.args[0]
+        self.assertEqual(outbound.get_header("Authorization"), "Bearer secret")
+        body = json.loads(outbound.data)
+        self.assertEqual(body["params"]["name"], "submit_agentx_benchmark")
+        self.assertEqual(
+            body["params"]["_meta"]["io.modelcontextprotocol/protocolVersion"],
+            PROTOCOL_VERSION,
+        )
+
+    def test_public_cli_submission_fails_on_mcp_tool_error(self):
+        request_path = Path(self.temp.name) / "request.json"
+        request_path.write_text(request().model_dump_json())
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, _maximum):
+                return json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "result": {
+                            "isError": True,
+                            "structuredContent": {"error": "full"},
+                        },
+                    }
+                ).encode()
+
+        with (
+            patch.dict(os.environ, {"AGENTX_API_TOKEN": "secret"}),
+            patch("agentx_service.cli.urlopen", return_value=Response()),
+            patch("builtins.print"),
+        ):
+            self.assertEqual(_submit_http(str(request_path)), 1)
+
     def test_mcp_plan_and_validation_error_are_tool_results(self):
         mcp = AgentXMcp(self.controller)
         headers, body = mcp_message(
@@ -372,7 +855,9 @@ class ServiceTests(unittest.TestCase):
 
     def test_mcp_replaces_oversized_tool_results_with_bounded_error(self):
         limited_config = operator_config(self.temp.name, maximum_mcp_result_bytes=4096)
-        controller = BenchmarkController(limited_config, self.backend, self.store)
+        controller = BenchmarkController(
+            limited_config, self.backend, self.store, self.monitoring
+        )
         controller.get_report = lambda _run_id: {"raw": "x" * 5000}  # type: ignore[method-assign]
         mcp = AgentXMcp(controller)
         headers, body = mcp_message(
@@ -391,7 +876,8 @@ class ServiceTests(unittest.TestCase):
             AttemptPhase.SUCCEEDED
         )
         record = self.controller.reconcile(record.run_id)
-        artifacts = self.controller.list_artifacts(record.run_id)
+        listing = self.controller.list_artifacts(record.run_id)
+        artifacts = listing["artifacts"]
         self.assertTrue(
             all(set(item) == {"name", "size_bytes", "sha256"} for item in artifacts)
         )

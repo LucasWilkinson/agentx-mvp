@@ -11,6 +11,18 @@ rules:
   - apiGroups: ["batch"]
     resources: ["jobs"]
     verbs: ["create", "get", "list", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  - apiGroups: ["kueue.x-k8s.io"]
+    resources: ["localqueues"]
+    verbs: ["get", "list"]
+  - apiGroups: ["kueue.x-k8s.io"]
+    resources: ["workloads"]
+    verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -23,6 +35,28 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: agentx-service
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: agentx-service-clusterqueue-reader
+rules:
+  - apiGroups: ["kueue.x-k8s.io"]
+    resources: ["clusterqueues"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: agentx-service-clusterqueue-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: agentx-service-clusterqueue-reader
+subjects:
+  - kind: ServiceAccount
+    name: agentx-service
+    namespace: vllm
 ---
 apiVersion: v1
 kind: Service
@@ -61,12 +95,19 @@ spec:
           env:
             - name: AGENTX_OPERATOR_CONFIG
               value: /etc/agentx/operator-config.json
+            - name: AGENTX_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: agentx-service-auth
+                  key: token
           ports:
             - name: http
               containerPort: 8080
           readinessProbe:
             httpGet: {path: /readyz, port: http}
             periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
           livenessProbe:
             httpGet: {path: /healthz, port: http}
             periodSeconds: 10
@@ -76,16 +117,17 @@ spec:
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: {drop: ["ALL"]}
+            seccompProfile: {type: RuntimeDefault}
           volumeMounts:
             - name: config
               mountPath: /etc/agentx
               readOnly: true
             - name: artifacts
-              mountPath: /mnt/agentx
+              mountPath: /mnt/lustre
       volumes:
         - name: config
           configMap:
             name: agentx-service-config
         - name: artifacts
           persistentVolumeClaim:
-            claimName: agentx-results
+            claimName: lustre-pvc-vllm

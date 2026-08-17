@@ -92,7 +92,11 @@ class TargetConfig(StrictModel):
     model_revision: str = Field(
         min_length=7, max_length=128, pattern=r"^[A-Za-z0-9._-]+$"
     )
-    vllm_image: str = Field(min_length=1, max_length=512)
+    vllm_image: str = Field(
+        min_length=1,
+        max_length=512,
+        pattern=r"^[^\s@]+@sha256:[0-9a-f]{64}$",
+    )
     vllm_fingerprint: str | None = Field(default=None, max_length=256)
 
     @field_validator("endpoint_url")
@@ -114,11 +118,11 @@ class QueueConfig(StrictModel):
     cpu_limit: str = Field(pattern=r"^[1-9][0-9]*m?$", max_length=16)
     memory_request: str = Field(pattern=r"^[1-9][0-9]*(?:Mi|Gi)$", max_length=16)
     memory_limit: str = Field(pattern=r"^[1-9][0-9]*(?:Mi|Gi)$", max_length=16)
-    ephemeral_storage_limit: str = Field(
+    ephemeral_storage_request: str = Field(
         default="20Gi", pattern=r"^[1-9][0-9]*(?:Mi|Gi)$", max_length=16
     )
-    covered_resources: list[Literal["cpu", "memory", "ephemeral-storage"]] = Field(
-        default_factory=lambda: ["cpu", "memory"]
+    ephemeral_storage_limit: str = Field(
+        default="20Gi", pattern=r"^[1-9][0-9]*(?:Mi|Gi)$", max_length=16
     )
 
 
@@ -127,6 +131,11 @@ class MonitoringConfig(StrictModel):
     gpu_telemetry_urls: list[str] = Field(min_length=1, max_length=64)
     prometheus_url: str
     grafana_url: str
+    server_up_query: str = Field(min_length=1, max_length=2048)
+    gpu_up_query: str = Field(min_length=1, max_length=2048)
+    expected_server_targets: int = Field(strict=True, ge=1, le=4096)
+    expected_gpu_targets: int = Field(strict=True, ge=1, le=4096)
+    capture_queries: dict[StrictName, str] = Field(min_length=1, max_length=32)
 
     @field_validator("server_metrics_url", "prometheus_url", "grafana_url")
     @classmethod
@@ -169,10 +178,21 @@ class LimitsConfig(StrictModel):
     maximum_list_results: int = Field(default=100, ge=1, le=500)
     maximum_mcp_result_bytes: int = Field(default=1_048_576, ge=4096, le=4_194_304)
     maximum_profile_bytes: int = Field(default=16_777_216, ge=1024, le=134_217_728)
+    maximum_artifact_files: int = Field(default=500, ge=10, le=10_000)
+    maximum_artifact_file_bytes: int = Field(
+        default=536_870_912, ge=1024, le=4_294_967_296
+    )
+    maximum_attempt_artifact_bytes: int = Field(
+        default=2_147_483_648, ge=4096, le=17_179_869_184
+    )
+    maximum_log_bytes: int = Field(default=16_777_216, ge=1024, le=134_217_728)
+    maximum_retained_terminal_runs: int = Field(default=50, ge=1, le=500)
+    terminal_retention_seconds: int = Field(default=604_800, ge=3600, le=31_536_000)
     scenario_valid_duration_seconds: int = Field(default=900, ge=60, le=7200)
 
 
 class OperatorConfig(StrictModel):
+    service_namespace: StrictName
     aiperf_image: str = Field(min_length=1, max_length=512)
     hf_token_secret_name: StrictName | None = None
     max_context_length: int = Field(default=131072, ge=1024, le=1_048_576)
@@ -189,6 +209,16 @@ class OperatorConfig(StrictModel):
         if self.limits.maximum_active_runs > self.limits.maximum_list_results:
             raise ValueError(
                 "maximum_list_results must cover every possible active run for restart reconstruction"
+            )
+        mismatched = sorted(
+            name
+            for name, queue in self.queues.items()
+            if queue.namespace != self.service_namespace
+        )
+        if mismatched:
+            raise ValueError(
+                "all LocalQueues must be in service_namespace because Jobs and the PVC are namespaced: "
+                + ", ".join(mismatched)
             )
         return self
 
@@ -229,8 +259,10 @@ class AttemptRecord(StrictModel):
     attempt_artifact_directory: str
     canonical_artifact_directory: str
     error: str | None = None
+    cleanup_pending: bool = False
     artifact_hashes: dict[str, str] = Field(default_factory=dict)
     monitoring_warnings: list[str] = Field(default_factory=list)
+    monitoring_provenance: dict[str, Any] = Field(default_factory=dict)
 
 
 class RunState(StrEnum):

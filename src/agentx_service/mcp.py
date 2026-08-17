@@ -331,7 +331,7 @@ class AgentXMcp:
 
     def _artifacts(self, arguments):
         run_id = self._validated(RunReference, arguments).run_id
-        return {"run_id": run_id, "artifacts": self.controller.list_artifacts(run_id)}
+        return {"run_id": run_id, **self.controller.list_artifacts(run_id)}
 
     def _report(self, arguments):
         return self.controller.get_report(

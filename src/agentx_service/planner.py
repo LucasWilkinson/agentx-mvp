@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation
 from pathlib import PurePosixPath
 
+from .backend import QueueObservation
 from .models import BenchmarkPlan, BenchmarkRequest, OperatorConfig
 
 
@@ -9,7 +11,39 @@ class PlanningError(ValueError):
     pass
 
 
-def plan_benchmark(request: BenchmarkRequest, config: OperatorConfig) -> BenchmarkPlan:
+def _quantity(value: str) -> Decimal:
+    suffixes = {
+        "Ki": Decimal(1024),
+        "Mi": Decimal(1024) ** 2,
+        "Gi": Decimal(1024) ** 3,
+        "Ti": Decimal(1024) ** 4,
+        "Pi": Decimal(1024) ** 5,
+        "Ei": Decimal(1024) ** 6,
+        "n": Decimal("0.000000001"),
+        "u": Decimal("0.000001"),
+        "m": Decimal("0.001"),
+        "k": Decimal(1000),
+        "M": Decimal(1000) ** 2,
+        "G": Decimal(1000) ** 3,
+        "T": Decimal(1000) ** 4,
+        "P": Decimal(1000) ** 5,
+        "E": Decimal(1000) ** 6,
+    }
+    for suffix, multiplier in suffixes.items():
+        if value.endswith(suffix):
+            return Decimal(value[: -len(suffix)]) * multiplier
+    try:
+        return Decimal(value)
+    except InvalidOperation as error:
+        raise PlanningError(f"invalid Kubernetes resource quantity: {value}") from error
+
+
+def plan_benchmark(
+    request: BenchmarkRequest,
+    config: OperatorConfig,
+    queue_observation: QueueObservation,
+    monitoring_status: dict[str, object] | None = None,
+) -> BenchmarkPlan:
     target = config.targets.get(request.logical_model_target)
     if target is None:
         raise PlanningError(
@@ -34,12 +68,54 @@ def plan_benchmark(request: BenchmarkRequest, config: OperatorConfig) -> Benchma
             f"monitoring profile is not operator configured: {request.monitoring_profile}"
         )
 
-    required = {"cpu", "memory"}
-    covered = set(queue.covered_resources)
+    if (
+        queue_observation.local_queue != request.local_queue
+        or queue_observation.namespace != queue.namespace
+    ):
+        raise PlanningError(
+            "observed LocalQueue identity does not match operator configuration"
+        )
+    if not queue_observation.active:
+        raise PlanningError(
+            f"ClusterQueue {queue_observation.cluster_queue} is not Active"
+        )
+    required = {"cpu", "memory", "ephemeral-storage"}
+    covered = set(queue_observation.covered_resources)
     missing = sorted(required - covered)
     if missing:
         raise PlanningError(
             f"LocalQueue does not cover required resources: {', '.join(missing)}"
+        )
+    requests = {
+        "cpu": queue.cpu_request,
+        "memory": queue.memory_request,
+        "ephemeral-storage": queue.ephemeral_storage_request,
+    }
+    common_flavors = set.intersection(
+        *(
+            set(queue_observation.flavors_by_resource.get(resource, ()))
+            for resource in sorted(required)
+        )
+    )
+    eligible_flavors: list[str] = []
+    for flavor in sorted(common_flavors):
+        sufficient = True
+        for resource, requested in requests.items():
+            flavors = queue_observation.flavors_by_resource.get(resource, ())
+            quotas = queue_observation.nominal_quota_by_resource.get(resource, ())
+            try:
+                quota = quotas[flavors.index(flavor)]
+            except (ValueError, IndexError):
+                sufficient = False
+                break
+            if _quantity(quota) < _quantity(requested):
+                sufficient = False
+                break
+        if sufficient:
+            eligible_flavors.append(flavor)
+    if not eligible_flavors:
+        raise PlanningError(
+            "no single Kueue ResourceFlavor has nominal quota for the full PodSet request"
         )
 
     attempts = len(request.concurrencies) * (request.retries + 1)
@@ -66,11 +142,16 @@ def plan_benchmark(request: BenchmarkRequest, config: OperatorConfig) -> Benchma
         queue_resource_coverage={
             "local_queue": request.local_queue,
             "namespace": queue.namespace,
+            "cluster_queue": queue_observation.cluster_queue,
+            "cluster_queue_active": queue_observation.active,
             "required": sorted(required),
             "covered": sorted(covered),
             "missing": missing,
+            "flavors_by_resource": queue_observation.flavors_by_resource,
+            "nominal_quota_by_resource": queue_observation.nominal_quota_by_resource,
+            "eligible_flavors": eligible_flavors,
             "per_job": {
-                "requests": {"cpu": queue.cpu_request, "memory": queue.memory_request},
+                "requests": requests,
                 "limits": {
                     "cpu": queue.cpu_limit,
                     "memory": queue.memory_limit,
@@ -88,6 +169,7 @@ def plan_benchmark(request: BenchmarkRequest, config: OperatorConfig) -> Benchma
             "gpu_telemetry": monitoring.gpu_telemetry_urls,
             "prometheus": monitoring.prometheus_url,
             "grafana": monitoring.grafana_url,
+            "preflight": monitoring_status or {},
         },
         scenario_validity={
             "valid": request.duration_seconds

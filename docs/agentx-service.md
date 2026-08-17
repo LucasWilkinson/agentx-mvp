@@ -4,7 +4,9 @@ The service turns the AgentX-MVP AIPerf sweep into a bounded, durable
 controller. Callers select operator-owned names; they cannot provide URLs,
 images, paths, manifests, AIPerf arguments, or shell. Every benchmark is
 planned before it is admitted as one suspended, CPU-only Kubernetes Job per
-concurrency. Kueue owns unsuspension.
+concurrency. Planning reads the actual LocalQueue and ClusterQueue, fails unless
+the ClusterQueue is Active and covers every requested resource, and verifies
+healthy, unique Prometheus targets. Kueue owns unsuspension.
 
 ## Request schema
 
@@ -44,25 +46,39 @@ The JSON document is strict and has these required sections:
   `max_context_length`.
 - `targets`: logical keys mapped to `endpoint_url`, allowed
   `served_model_names`, allowed LocalQueues, pinned `model_revision`,
-  `vllm_image`, and optional `vllm_fingerprint`.
-- `queues`: LocalQueue keys mapped to namespace, CPU/memory request and limit,
-  ephemeral storage limit, and covered resource names.
+  digest-pinned `vllm_image`, and optional `vllm_fingerprint`. The image must
+  match the deployed model; runtime warmup/AIPerf fingerprints take precedence
+  in the report.
+- `service_namespace`: the one namespace containing the service, PVC,
+  LocalQueues, and benchmark Jobs. Cross-namespace queue configuration is
+  rejected.
+- `queues`: LocalQueue keys mapped to that namespace and explicit CPU, memory,
+  and ephemeral-storage requests and limits. Coverage, flavors, and quota are
+  read from Kueue rather than asserted by configuration.
 - `monitoring_profiles`: fixed server metrics, GPU telemetry, Prometheus, and
-  Grafana URLs.
+  Grafana URLs; bounded PromQL; expected server/GPU target counts; and capture
+  queries. Planning rejects unhealthy, missing, or duplicate targets.
 - `storage`: PVC name, absolute mount path, and scoped runs subdirectory.
-- `limits`: admission timeout, runtime grace, active/list/MCP bounds, and the
-  profile size bound, and scenario-valid duration.
+- `limits`: admission/runtime bounds, MCP/profile/log/file/attempt limits,
+  terminal-run retention count/age, and scenario-valid duration.
 
 See [the Kimi K3 A100 example](../examples/operator-config.kimi-k3-a100.json).
+Replace its expected target counts and PromQL with the rendered deployment's
+actual per-rank PodMonitor coverage before deployment; the example values are
+fail-closed placeholders.
 The service and AIPerf Jobs must mount the same PVC at the configured path.
-Adjust the Deployment's PVC name and mount path when the operator document
-differs. The PVC contains atomic state records, immutable attempt trees,
+The supplied manifest matches the Kimi example's `lustre-pvc-vllm` mounted at
+`/mnt/lustre`, with service data under `agentx-mcp/runs`; adjust both the Deployment and operator document together for a
+different installation. The PVC contains atomic state records, immutable attempt trees,
 canonical successful artifacts, and reports, so a replacement Pod reconstructs
-all non-terminal runs from Kubernetes.
+all non-terminal runs from Kubernetes. A persisted-but-missing Job is recreated
+idempotently; a transient observation error remains retryable.
 
 ## MCP contract
 
-The only MCP endpoint is stateless `POST /mcp`, protocol `2026-07-28`.
+The only MCP endpoint is stateless authenticated `POST /mcp`, protocol
+`2026-07-28`. Every request requires `Authorization: Bearer <token>` from the
+`agentx-service-auth` Secret.
 Every request supplies per-request metadata and matching
 `MCP-Protocol-Version`, `Mcp-Method`, and, for calls, `Mcp-Name` headers. There
 is no `initialize`, session identifier, GET event stream, or legacy fallback.
@@ -78,25 +94,33 @@ The tools are:
 - `list_agentx_artifacts` (read-only, idempotent)
 - `get_agentx_report` (read-only, idempotent)
 
-Raw logs, JSONL request traces, Prometheus exports, and dashboards remain on
-the PVC. MCP lists their bounded metadata and hashes but only returns the
-bounded structured report.
+Raw logs, JSONL request traces, exact-window Prometheus exports, and generated
+dashboards remain on the PVC. Per-file, file-count, per-attempt, log, retention,
+and MCP bounds are operator configured. An oversized attempt is replaced by a
+small durable error manifest. Artifact listings explicitly report truncation.
 
 ## Deploy
 
-Build `Dockerfile.orchestrator` with the image used by the Deployment, ensure
-the results PVC exists, then:
+Build `Dockerfile.orchestrator` with the image used by the Deployment; ensure
+the results PVC and an A100 ClusterQueue covering `cpu`, `memory`, and
+`ephemeral-storage` exist; inspect and apply the supplied LocalQueue; then:
 
 ```bash
 export NAMESPACE=vllm
 export AGENTX_OPERATOR_CONFIG=examples/operator-config.kimi-k3-a100.json
+export AGENTX_API_TOKEN='<generated secret value>'
+kubectl apply -n "$NAMESPACE" -f deploy/localqueue-a100-benchmark.yaml
 just agentx-service-deploy
 kubectl -n "$NAMESPACE" get deploy,svc agentx-service
 kubectl -n "$NAMESPACE" get role agentx-service -o yaml
 ```
 
-The supplied Role can only create/read/patch/delete namespaced Jobs. Health is
-`GET /healthz`; readiness is `GET /readyz`. Apply an environment-specific copy
+The supplied Role can manage Jobs and read their logs, LocalQueues, and owned
+Kueue Workload admission conditions; a read-only ClusterRole permits
+ClusterQueue preflight. Health is `GET /healthz`.
+Readiness verifies PVC writes, Kubernetes access, active queues, Prometheus,
+and reconciler health. Adjust the ClusterRoleBinding subject namespace if it is
+not `vllm`. Apply an environment-specific copy
 of `deploy/network-policy.example.yaml` only after replacing its documented
 selectors and API CIDR.
 
@@ -121,6 +145,7 @@ An MCP plan call uses the matching service headers:
 
 ```bash
 curl -sS http://agentx-service.vllm.svc.cluster.local:8080/mcp \
+  -H "Authorization: Bearer $AGENTX_API_TOKEN" \
   -H 'content-type: application/json' \
   -H 'MCP-Protocol-Version: 2026-07-28' \
   -H 'Mcp-Method: tools/call' \
@@ -130,21 +155,29 @@ curl -sS http://agentx-service.vllm.svc.cluster.local:8080/mcp \
 
 ## Lifecycle, reports, and migration
 
+Submit performs a fixed eight-token warmup and records its exact boundaries.
 Admission pending, runtime pending, and running are separate phases. Failed
 attempts retain their artifact directories. Only a successful attempt with a
-valid AIPerf profile is atomically promoted. A failed concurrency does not
+valid, bounded AIPerf profile is atomically promoted. Existing canonical data
+is accepted only when its marker and recomputed hashes match the same attempt.
+Kueue Workload admission conditions are retained in pending/timeout errors.
+Job cleanup is persisted before deletion and completed after restart rather
+than rerunning a terminal attempt. A failed concurrency does not
 discard successful peers: the terminal state becomes `partial`. Cancellation
 deletes only the active owned Job and is idempotent.
 
 Reports contain AgentX scenario validity, interactivity/throughput metrics,
 every attempt and exact unpadded measurement window, vLLM image/fingerprint,
-server/GPU telemetry provenance and warnings, the effective request/target/
+live target-health and duplicate-scrape evidence, exact-window Prometheus
+exports, benchmark stdout, server/GPU telemetry provenance and warnings, the effective request/target/
 queue configuration, and SHA-256 artifact hashes. Existing
 `gen_interactivity_chart.py`, Grafana export, dashboard overlay, and report
 files remain unchanged and can operate on the canonical directories.
 
-`just run` and `just orchestrator-run` now submit strict request JSON to the
-same in-cluster typed controller. Existing scripts needing the old positional behavior can
-temporarily use `just legacy-run` and `just legacy-orchestrator-run`; these are
-compatibility paths, not agent-facing interfaces. `just sweep`, reporting, and
-dashboard recipes are retained for historical result trees.
+`just run`, `just smoke`, `just sweep`, and `just orchestrator-run` all submit
+strict request JSON through the authenticated MCP endpoint of the same
+in-cluster typed controller, preserving its single capacity transaction.
+Existing scripts
+needing positional behavior are explicitly prefixed `legacy-` (`legacy-run`,
+`legacy-sweep`, and `legacy-orchestrator-run`) and are not agent-facing.
+Historical report/dashboard recipes remain available for old result trees.

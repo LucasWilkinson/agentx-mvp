@@ -9,6 +9,7 @@ with [the service contract and deployment guide](docs/agentx-service.md).
 
 - `kubectl` configured for your cluster
 - Kueue installed in the cluster
+- `AGENTX_API_TOKEN` set for service deployment and MCP clients
 - `lustre-pvc-vllm` available in the benchmark namespace
 - `.env` file with:
   ```
@@ -37,25 +38,25 @@ Override these only when manifesto installs the monitoring stack somewhere else.
 ## Quick start
 
 ```bash
-just setup           # install queue manifests and deploy the orchestrator
+just setup           # deploy the authenticated typed service
 just check           # verify the model endpoint is reachable
 just run             # submit AGENTX_REQUEST to the in-cluster typed service
-just legacy-run 256 900 # old positional workflow during migration
+just legacy-run 256 900 # explicitly legacy positional workflow
 just smoke           # fast Kueue Job plumbing test (~60s, invalid result)
 just orchestrator-run      # submit to the durable in-cluster service
-just logs            # tail orchestrator logs
-just shell           # shell into the orchestrator
-just clean           # delete benchmark jobs and the orchestrator pod
+just logs            # tail typed service logs
+just shell           # shell into the typed service
+just clean           # remove typed Jobs/service resources; preserve PVC data
 ```
 
 The orchestrator image contains this harness at `/workspace/agentx-mvp` and
 `llm-manifesto` at `/workspace/llm-manifesto`; `just orchestrator-run` does not
 copy source trees into the pod. Build it with `just orchestrator-build`.
 
-## Model Deployment
+## Legacy model deployment helpers
 
 ```bash
-just setup-kueue     # install/update the GB200 Kueue queue objects
+just legacy-setup-kueue # install/update the historical GB200 queue objects
 just start-model     # deploy the llm-manifesto spec
 just stop-model      # tear down the manifesto deployment
 ```
@@ -65,7 +66,7 @@ configured `llm-manifesto` spec and labels each rendered `LeaderWorkerSet` with
 `kueue.x-k8s.io/queue-name: nightly-eval`. Override with `KUEUE_QUEUE=...`.
 It does not call the `llm-manifesto` `just start` recipe.
 
-## Benchmark Jobs
+## Legacy benchmark result layout
 
 Benchmarks run as Kueue-managed `batch/v1` Jobs, not as `kubectl exec` commands
 into a long-lived AIPerf pod. Each Job mounts `LUSTRE_CLAIM` at `/mnt/lustre`
@@ -98,13 +99,19 @@ contains `interactivity_vs_throughput.html`.
 
 ## Sweep
 
-Run the benchmark across concurrency levels for the configured manifesto spec:
+The public sweep submits the strict operator/request JSON through the typed
+controller:
 
 ```bash
-just sweep "$(just --quiet run-dir 900)"
+just sweep
+AGENTX_REQUEST=examples/kimi-k3-a100-smoke.json just sweep
+```
 
-# Custom duration (default 900s)
-just sweep "$(just --quiet run-dir 1200)" 1200
+Historical manifesto-managed positional sweeps remain explicit compatibility
+paths:
+
+```bash
+just legacy-sweep "$(just --quiet run-dir 900)" 900
 ```
 
 Each sweep produces result directories like `results/<run>/results_$USER-wide-ep-3p-ep8-1d-ep8/results_$USER-wide-ep-3p-ep8-1d-ep8_c64/`, `results/<run>/results_$USER-wide-ep-3p-ep8-1d-ep8/results_$USER-wide-ep-3p-ep8-1d-ep8_c256/`, etc. Each run directory contains:

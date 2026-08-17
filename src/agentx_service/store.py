@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -59,3 +60,19 @@ class FileRunStore:
                 records.append(record)
         records.sort(key=lambda item: item.created_at, reverse=True)
         return records[:limit]
+
+    def check_writable(self) -> None:
+        self.state.mkdir(parents=True, exist_ok=True)
+        fd, path = tempfile.mkstemp(prefix=".readiness-", dir=self.state)
+        os.close(fd)
+        os.unlink(path)
+
+    def delete(self, run_id: str) -> None:
+        path = self._path(run_id)
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        run_root = self.root / run_id
+        if run_root.is_dir() and run_root.parent == self.root:
+            shutil.rmtree(run_root)

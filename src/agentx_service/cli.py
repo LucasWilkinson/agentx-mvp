@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
+from urllib.request import Request, urlopen
 
 from .backend import KubectlBackend
 from .config import load_operator_config
 from .controller import TERMINAL_STATES, BenchmarkController
+from .mcp import CAPABILITIES_META, CLIENT_INFO_META, PROTOCOL_META, PROTOCOL_VERSION
 from .models import BenchmarkRequest
-from .planner import plan_benchmark
+from .monitoring import PrometheusMonitoring
 from .server import serve
 
 
@@ -19,11 +22,52 @@ def _request(path: str) -> BenchmarkRequest:
     return BenchmarkRequest.model_validate_json(text)
 
 
+def _submit_http(path: str) -> int:
+    token = os.environ.get("AGENTX_API_TOKEN")
+    if not token:
+        raise RuntimeError("AGENTX_API_TOKEN is required")
+    arguments = _request(path).model_dump(mode="json")
+    params = {
+        "name": "submit_agentx_benchmark",
+        "arguments": arguments,
+        "_meta": {
+            PROTOCOL_META: PROTOCOL_VERSION,
+            CAPABILITIES_META: {},
+            CLIENT_INFO_META: {"name": "agentx-service-cli", "version": "0.1.0"},
+        },
+    }
+    body = json.dumps(
+        {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params}
+    ).encode()
+    endpoint = os.environ.get("AGENTX_SERVICE_URL", "http://127.0.0.1:8080/mcp")
+    request = Request(
+        endpoint,
+        data=body,
+        method="POST",
+        headers={
+            "authorization": f"Bearer {token}",
+            "content-type": "application/json",
+            "mcp-protocol-version": PROTOCOL_VERSION,
+            "mcp-method": "tools/call",
+            "mcp-name": "submit_agentx_benchmark",
+        },
+    )
+    with urlopen(request, timeout=900) as response:
+        payload = response.read(4_194_305)
+    if len(payload) > 4_194_304:
+        raise RuntimeError("service response exceeded the CLI limit")
+    value = json.loads(payload)
+    print(json.dumps(value, separators=(",", ":")))
+    if value.get("error") or value.get("result", {}).get("isError") is True:
+        return 1
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="agentx-service")
     parser.add_argument("--config", help="operator-owned JSON config")
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("plan", "submit", "run"):
+    for name in ("plan", "submit", "submit-http", "run"):
         item = sub.add_parser(name)
         item.add_argument("request", help="strict request JSON file, or - for stdin")
     get = sub.add_parser("get")
@@ -37,16 +81,18 @@ def main() -> int:
     args = parser.parse_args()
     if args.command == "serve":
         if args.config:
-            __import__("os").environ["AGENTX_OPERATOR_CONFIG"] = args.config
+            os.environ["AGENTX_OPERATOR_CONFIG"] = args.config
         serve(args.host, args.port)
         return 0
+    if args.command == "submit-http":
+        return _submit_http(args.request)
     config = load_operator_config(args.config)
+    controller = BenchmarkController(
+        config, KubectlBackend(), monitoring=PrometheusMonitoring()
+    )
     if args.command == "plan":
-        value = plan_benchmark(_request(args.request), config)
-        print(value.model_dump_json(indent=2))
-        return 0
-    controller = BenchmarkController(config, KubectlBackend())
-    if args.command == "submit":
+        value = controller.plan(_request(args.request))
+    elif args.command == "submit":
         value = controller.submit(_request(args.request))
     elif args.command == "get":
         value = controller.get(args.run_id)

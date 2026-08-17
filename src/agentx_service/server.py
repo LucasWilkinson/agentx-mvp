@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import json
 import os
 import threading
@@ -9,11 +10,21 @@ from .backend import KubectlBackend
 from .config import load_operator_config
 from .controller import BenchmarkController
 from .mcp import AgentXMcp
+from .monitoring import PrometheusMonitoring
+
+
+def authorized(authorization: str | None, token: str) -> bool:
+    return hmac.compare_digest(authorization or "", f"Bearer {token}")
 
 
 def serve(host: str = "0.0.0.0", port: int = 8080) -> None:
     config = load_operator_config()
-    controller = BenchmarkController(config, KubectlBackend())
+    api_token = os.environ.get("AGENTX_API_TOKEN")
+    if not api_token:
+        raise RuntimeError("AGENTX_API_TOKEN is required")
+    controller = BenchmarkController(
+        config, KubectlBackend(), monitoring=PrometheusMonitoring()
+    )
     controller.reconstruct()
     allowed = {
         value
@@ -21,25 +32,55 @@ def serve(host: str = "0.0.0.0", port: int = 8080) -> None:
         if value
     }
     mcp = AgentXMcp(controller, allowed_origins=allowed)
-    lock = threading.RLock()
     stopped = threading.Event()
+    reconciliation = {"healthy": True, "error": None}
+    readiness = {"healthy": False, "detail": {}, "error": "not checked yet"}
+    readiness_lock = threading.Lock()
 
     def reconcile_loop() -> None:
         interval = max(2, int(os.environ.get("AGENTX_RECONCILE_SECONDS", "10")))
         while not stopped.wait(interval):
-            with lock:
+            try:
                 controller.reconcile_all()
+                reconciliation.update(healthy=True, error=None)
+            except Exception as error:  # noqa: BLE001 - keep controller alive.
+                reconciliation.update(healthy=False, error=str(error)[:1000])
 
-    threading.Thread(
-        target=reconcile_loop, name="agentx-reconciler", daemon=True
-    ).start()
+    def readiness_loop() -> None:
+        while not stopped.is_set():
+            try:
+                detail = controller.readiness()
+            except Exception as error:  # noqa: BLE001 - readiness fails closed.
+                value = {"healthy": False, "detail": {}, "error": str(error)[:1000]}
+            else:
+                value = {"healthy": True, "detail": detail, "error": None}
+            with readiness_lock:
+                readiness.update(value)
+            if stopped.wait(10):
+                break
+
+    for target, name in (
+        (reconcile_loop, "agentx-reconciler"),
+        (readiness_loop, "agentx-readiness"),
+    ):
+        threading.Thread(target=target, name=name, daemon=True).start()
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "agentx-service/0.1"
 
         def do_GET(self) -> None:
-            if self.path in {"/healthz", "/readyz"}:
+            if self.path == "/healthz":
                 self._json(200, {"status": "ok"})
+            elif self.path == "/readyz":
+                with readiness_lock:
+                    cached = dict(readiness)
+                if not cached["healthy"] or not reconciliation["healthy"]:
+                    error = cached["error"] or (
+                        f"reconciler unhealthy: {reconciliation['error']}"
+                    )
+                    self._json(503, {"status": "not-ready", "error": error})
+                else:
+                    self._json(200, {"status": "ready", **cached["detail"]})
             else:
                 self._json(
                     405 if self.path == "/mcp" else 404,
@@ -53,6 +94,9 @@ def serve(host: str = "0.0.0.0", port: int = 8080) -> None:
         def do_POST(self) -> None:
             if self.path != "/mcp":
                 self._json(404, {"error": "not found"})
+                return
+            if not authorized(self.headers.get("authorization"), api_token):
+                self._json(401, {"error": "unauthorized"})
                 return
             try:
                 length = int(self.headers.get("content-length", "0"))
@@ -84,8 +128,7 @@ def serve(host: str = "0.0.0.0", port: int = 8080) -> None:
                     },
                 )
                 return
-            with lock:
-                status, response = mcp.handle(dict(self.headers.items()), message)
+            status, response = mcp.handle(dict(self.headers.items()), message)
             self._json(status, response)
 
         def _json(self, status: int, value) -> None:
