@@ -368,6 +368,9 @@ class ServiceTests(unittest.TestCase):
         self.assertIn("ARTIFACT_MAX_FILES", container["args"][1])
         env = {item["name"]: item["value"] for item in container["env"]}
         self.assertEqual(env["ARTIFACT_MAX_FILES"], "500")
+        self.assertEqual(env["HOME"], "/workspace")
+        self.assertEqual(env["XDG_CACHE_HOME"], "/workspace/.cache")
+        self.assertEqual(env["HF_HOME"], "/workspace/.cache/huggingface")
         self.assertFalse(
             manifest["spec"]["template"]["spec"]["automountServiceAccountToken"]
         )
@@ -394,6 +397,22 @@ class ServiceTests(unittest.TestCase):
         self.assertIn(b"truncated", value)
         self.assertIn("--limit-bytes=64", popen.call_args.args[0])
 
+    def test_kubectl_readiness_uses_supported_get_flags(self):
+        calls = []
+
+        class Backend(KubectlBackend):
+            def _run(self, args, *, stdin=None):
+                calls.append(args)
+                return ""
+
+        self.assertEqual(
+            Backend().ready("bench"),
+            {"kubernetes": "ok", "namespace": "bench"},
+        )
+        self.assertEqual(len(calls), 1)
+        self.assertNotIn("--limit=1", calls[0])
+        self.assertEqual(calls[0][:4], ["get", "jobs", "-n", "bench"])
+
     def test_kueue_workload_conditions_are_returned_as_admission_diagnostics(self):
         class Backend(KubectlBackend):
             def _run(self, args, *, stdin=None):
@@ -418,6 +437,73 @@ class ServiceTests(unittest.TestCase):
 
         detail = Backend()._workload_diagnostic("bench", "job", "uid")
         self.assertIn("insufficient a100 flavor quota", detail)
+
+    def test_failed_job_includes_pod_termination_diagnostics(self):
+        class Backend(KubectlBackend):
+            def _run(self, args, *, stdin=None):
+                if args[:2] == ["get", "job"]:
+                    return json.dumps(
+                        {
+                            "status": {
+                                "startTime": "2026-08-17T00:00:00Z",
+                                "conditions": [
+                                    {
+                                        "type": "Failed",
+                                        "status": "True",
+                                        "reason": "BackoffLimitExceeded",
+                                        "message": "Job has reached the backoff limit",
+                                    }
+                                ]
+                            }
+                        }
+                    )
+                return json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {"name": "job-pod"},
+                                "status": {
+                                    "reason": "Failed",
+                                    "containerStatuses": [
+                                        {
+                                            "name": "aiperf",
+                                            "state": {
+                                                "terminated": {
+                                                    "reason": "OOMKilled",
+                                                    "exitCode": 137,
+                                                }
+                                            },
+                                        }
+                                    ],
+                                },
+                            }
+                        ]
+                    }
+                )
+
+        observation = Backend().observe("bench", "job")
+        self.assertEqual(observation.phase, AttemptPhase.FAILED)
+        self.assertEqual(observation.admitted_at, "2026-08-17T00:00:00Z")
+        self.assertIn("BackoffLimitExceeded", observation.error)
+        self.assertIn("OOMKilled (exit 137)", observation.error)
+
+    def test_completed_job_backfills_admission_when_running_phase_was_missed(self):
+        class Backend(KubectlBackend):
+            def _run(self, args, *, stdin=None):
+                return json.dumps(
+                    {
+                        "status": {
+                            "startTime": "2026-08-17T00:00:00Z",
+                            "completionTime": "2026-08-17T00:01:00Z",
+                            "conditions": [{"type": "Complete", "status": "True"}],
+                        }
+                    }
+                )
+
+        observation = Backend().observe("bench", "job")
+        self.assertEqual(observation.phase, AttemptPhase.SUCCEEDED)
+        self.assertEqual(observation.admitted_at, "2026-08-17T00:00:00Z")
+        self.assertEqual(observation.started_at, "2026-08-17T00:00:00Z")
 
     def test_admission_and_runtime_are_distinct(self):
         record = self.controller.submit(request())

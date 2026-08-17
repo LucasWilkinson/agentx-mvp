@@ -126,6 +126,8 @@ exit \"$status\"
         ],
         "env": [
             {"name": "AIPERF_DATASET_WEKA_LIVE_ASSISTANT_RESPONSES", "value": "1"},
+            {"name": "HOME", "value": "/workspace"},
+            {"name": "XDG_CACHE_HOME", "value": "/workspace/.cache"},
             {"name": "HF_HOME", "value": "/workspace/.cache/huggingface"},
             {"name": "ARTIFACT_DEST", "value": attempt_directory},
             {
@@ -248,16 +250,25 @@ class KubectlBackend:
         if conditions.get("Complete", {}).get("status") == "True":
             return JobObservation(
                 AttemptPhase.SUCCEEDED,
+                admitted_at=status.get("startTime"),
                 started_at=status.get("startTime"),
                 completed_at=status.get("completionTime"),
             )
         failed = conditions.get("Failed", {})
         if failed.get("status") == "True":
+            error = f"{failed.get('reason', 'JobFailed')}: {failed.get('message', 'benchmark Job failed')}"
+            try:
+                pod_detail = self._pod_failure_diagnostic(namespace, name)
+            except RuntimeError:
+                pod_detail = None
+            if pod_detail:
+                error = f"{error}; {pod_detail}"
             return JobObservation(
                 AttemptPhase.FAILED,
+                admitted_at=status.get("startTime"),
                 started_at=status.get("startTime"),
                 completed_at=failed.get("lastTransitionTime"),
-                error=f"{failed.get('reason', 'JobFailed')}: {failed.get('message', 'benchmark Job failed')}",
+                error=error,
             )
         if value.get("spec", {}).get("suspend", False):
             return JobObservation(
@@ -274,6 +285,44 @@ class KubectlBackend:
                 AttemptPhase.RUNNING, admitted_at=admitted, started_at=admitted
             )
         return JobObservation(AttemptPhase.RUNTIME_PENDING, admitted_at=admitted)
+
+    def _pod_failure_diagnostic(self, namespace: str, job_name: str) -> str | None:
+        value = json.loads(
+            self._run(
+                [
+                    "get",
+                    "pods",
+                    "-n",
+                    namespace,
+                    "-l",
+                    f"job-name={job_name}",
+                    "-o",
+                    "json",
+                ]
+            )
+        )
+        details: list[str] = []
+        for pod in value.get("items", []):
+            pod_name = str(pod.get("metadata", {}).get("name", "unknown-pod"))
+            status = pod.get("status", {})
+            pod_reason = status.get("reason")
+            if pod_reason:
+                details.append(f"pod {pod_name}: {pod_reason}")
+            for container in status.get("containerStatuses", []):
+                state = container.get("state", {})
+                terminated = state.get("terminated") or container.get(
+                    "lastState", {}
+                ).get("terminated")
+                if not terminated:
+                    continue
+                reason = terminated.get("reason", "Terminated")
+                exit_code = terminated.get("exitCode")
+                suffix = f" (exit {exit_code})" if exit_code is not None else ""
+                details.append(
+                    f"pod {pod_name} container {container.get('name', 'unknown')}: "
+                    f"{reason}{suffix}"
+                )
+        return "; ".join(details)[:2000] or None
 
     def _workload_diagnostic(
         self, namespace: str, job_name: str, job_uid: str
@@ -448,7 +497,6 @@ class KubectlBackend:
                 namespace,
                 "-l",
                 "app.kubernetes.io/managed-by=agentx-service",
-                "--limit=1",
                 "-o",
                 "name",
             ]
