@@ -48,6 +48,8 @@ grafana_namespace := env_var_or_default('GRAFANA_NAMESPACE', monitoring_namespac
 grafana_service := env_var_or_default('GRAFANA_SERVICE', 'grafana')
 concurrency := "64"
 duration    := "900"
+agentx_operator_config := env_var_or_default('AGENTX_OPERATOR_CONFIG', 'examples/operator-config.kimi-k3-a100.json')
+agentx_request := env_var_or_default('AGENTX_REQUEST', 'examples/kimi-k3-a100-full.json')
 
 default:
     @just --list
@@ -111,8 +113,14 @@ warmup:
         sleep 30
     done
 
-# Run the AgentX-MVP benchmark as a Kueue-managed Kubernetes Job.
-run concurrency=concurrency duration=duration dest="./results" attempt="1":
+# Run through the same typed planner/controller used by MCP. Set
+# AGENTX_OPERATOR_CONFIG and AGENTX_REQUEST to select operator/request JSON.
+run request=agentx_request:
+    just orchestrator-run "{{request}}"
+
+# Pre-service compatibility path. It preserves the old positional interface
+# while operators migrate automation to strict request JSON.
+legacy-run concurrency=concurrency duration=duration dest="./results" attempt="1":
     just _run-job {{concurrency}} {{duration}} "{{dest}}" "" {{attempt}}
 
 _run-job concurrency duration dest unsafe_args attempt:
@@ -741,7 +749,7 @@ sweep-concurrency config_name dest="." duration="900":
             fi
             just drain
             just clear-kv-cache
-            if just warmup && just run $C {{duration}} "$RDIR" "$attempt"; then
+            if just warmup && just legacy-run $C {{duration}} "$RDIR" "$attempt"; then
                 RUN_OK=true
                 break
             fi
@@ -872,7 +880,7 @@ orchestrator-deploy:
     POD=$(kubectl get pod -n {{NAMESPACE}} -l app={{orchestrator_deploy}} -o jsonpath='{.items[0].metadata.name}')
     echo "Orchestrator pod ready: $POD"
 
-orchestrator-run outdir="" duration="900":
+legacy-orchestrator-run outdir="" duration="900":
     #!/usr/bin/env bash
     set -euo pipefail
     OUTDIR="{{outdir}}"
@@ -898,6 +906,25 @@ orchestrator-run outdir="" duration="900":
     echo "Sweep running detached: $OUTDIR"
     echo "Monitor: just orchestrator-logs"
     echo "Copy results: just orchestrator-results $OUTDIR"
+
+# Submit through the durable in-cluster service. The Deployment reconciler
+# continues the run after this command exits or the service Pod restarts.
+orchestrator-run request=agentx_request:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just agentx-service-deploy
+    kubectl exec -i -n {{NAMESPACE}} deploy/agentx-service -- \
+      agentx-service submit - < "{{request}}"
+
+agentx-service-deploy:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    kubectl create configmap agentx-service-config -n {{NAMESPACE}} \
+      --from-file=operator-config.json="{{agentx_operator_config}}" \
+      --dry-run=client -o yaml | kubectl apply -n {{NAMESPACE}} -f -
+    kubectl apply -n {{NAMESPACE}} -f deploy/agentx-service.yaml
+    kubectl rollout restart -n {{NAMESPACE}} deploy/agentx-service
+    kubectl rollout status -n {{NAMESPACE}} deploy/agentx-service --timeout=300s
 
 orchestrator-logs:
     POD=$(kubectl get pod -n {{NAMESPACE}} -l app={{orchestrator_deploy}} -o jsonpath='{.items[0].metadata.name}')

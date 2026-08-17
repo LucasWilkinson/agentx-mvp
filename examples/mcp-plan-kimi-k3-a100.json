@@ -1,0 +1,25 @@
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/call",
+  "params": {
+    "name": "plan_agentx_benchmark",
+    "arguments": {
+      "logical_model_target": "kimi-k3-a100",
+      "served_model_name": "mgoin/Kimi-K3-pruned75",
+      "scenario": "agentx-mvp",
+      "concurrencies": [64, 256],
+      "duration_seconds": 900,
+      "retries": 2,
+      "monitoring_profile": "full",
+      "local_queue": "a100-benchmark",
+      "result_label": "kimi-k3-a100-full",
+      "vdp_workstream_id": "kimi-k3-a100/agentx"
+    },
+    "_meta": {
+      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+      "io.modelcontextprotocol/clientCapabilities": {},
+      "io.modelcontextprotocol/clientInfo": {"name": "smoke", "version": "1"}
+    }
+  }
+}

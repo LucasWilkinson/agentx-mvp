@@ -2,6 +2,9 @@
 
 AIPerf AgentX-MVP benchmark harness for llm-d/manifesto deployments with prefill/decode disaggregation.
 
+The repository also ships a bounded, durable MCP benchmark service. Start
+with [the service contract and deployment guide](docs/agentx-service.md).
+
 ## Prerequisites
 
 - `kubectl` configured for your cluster
@@ -36,10 +39,10 @@ Override these only when manifesto installs the monitoring stack somewhere else.
 ```bash
 just setup           # install queue manifests and deploy the orchestrator
 just check           # verify the model endpoint is reachable
-just run             # run a Kueue-managed AIPerf Job
-just run 256 900     # override concurrency / duration
+just run             # submit AGENTX_REQUEST to the in-cluster typed service
+just legacy-run 256 900 # old positional workflow during migration
 just smoke           # fast Kueue Job plumbing test (~60s, invalid result)
-just orchestrator-run      # run the sweep from the in-cluster orchestrator
+just orchestrator-run      # submit to the durable in-cluster service
 just logs            # tail orchestrator logs
 just shell           # shell into the orchestrator
 just clean           # delete benchmark jobs and the orchestrator pod
