@@ -235,7 +235,7 @@ class AgentXMcp:
                     "Invalid params: this tool list is not paginated",
                     400,
                 )
-            return 200, self._result(
+            response = self._result(
                 request_id,
                 {
                     "tools": [tool.definition() for tool in self.tools],
@@ -243,6 +243,7 @@ class AgentXMcp:
                     "cacheScope": "private",
                 },
             )
+            return 200, self._bounded_response(request_id, response, legacy=False)
         if method != "tools/call":
             return self._error(request_id, -32601, f"Method not found: {method}", 404)
         arguments = params.get("arguments", {})
@@ -318,9 +319,10 @@ class AgentXMcp:
                     "Invalid params: this tool list is not paginated",
                     200,
                 )
-            return 200, self._legacy_result(
+            response = self._legacy_result(
                 request_id, {"tools": [tool.definition() for tool in self.tools]}
             )
+            return 200, self._bounded_response(request_id, response, legacy=True)
         if method != "tools/call":
             return self._error(request_id, -32601, f"Method not found: {method}", 200)
 

@@ -1176,6 +1176,16 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(response["result"]["structuredContent"]["maximum_bytes"], 4096)
         self.assertNotIn("x" * 100, json.dumps(response))
 
+        for message_factory in (mcp_message, legacy_mcp_message):
+            headers, body = message_factory("tools/list")
+            response = mcp.handle(headers, body)[1]
+            encoded = json.dumps(response, separators=(",", ":")).encode()
+            self.assertLessEqual(len(encoded), 4096)
+            self.assertTrue(response["result"]["isError"])
+            self.assertEqual(
+                response["result"]["structuredContent"]["maximum_bytes"], 4096
+            )
+
     def test_report_and_artifact_listing_are_hashed_and_bounded_by_type(self):
         record = self.controller.submit(request())
         self.write_artifacts(record)
