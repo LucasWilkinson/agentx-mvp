@@ -20,7 +20,11 @@ from agentx_service.backend import (
 )
 from agentx_service.cli import _submit_http
 from agentx_service.controller import BenchmarkController
-from agentx_service.mcp import PROTOCOL_VERSION, AgentXMcp
+from agentx_service.mcp import (
+    LEGACY_PROTOCOL_VERSION,
+    PROTOCOL_VERSION,
+    AgentXMcp,
+)
 from agentx_service.models import (
     AttemptPhase,
     AttemptRecord,
@@ -221,6 +225,19 @@ def mcp_message(method, params=None, *, version=PROTOCOL_VERSION):
     if method == "tools/call":
         headers["mcp-name"] = values.get("name", "")
     return headers, {"jsonrpc": "2.0", "id": 1, "method": method, "params": values}
+
+
+def legacy_mcp_message(method, params=None, *, request_id=1):
+    headers = {
+        "content-type": "application/json",
+        "accept": "application/json, text/event-stream",
+    }
+    if method != "initialize":
+        headers["mcp-protocol-version"] = LEGACY_PROTOCOL_VERSION
+    message = {"jsonrpc": "2.0", "method": method, "params": dict(params or {})}
+    if request_id is not None:
+        message["id"] = request_id
+    return headers, message
 
 
 class ServiceTests(unittest.TestCase):
@@ -1003,10 +1020,64 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(concurrency_schema["items"]["minimum"], 1)
         self.assertEqual(concurrency_schema["items"]["maximum"], 2048)
         self.assertNotIn("mcp-session-id", json.dumps(response).lower())
-        headers, body = mcp_message("initialize")
-        self.assertEqual(mcp.handle(headers, body)[0], 404)
         headers, body = mcp_message("tools/list", version="2025-06-18")
         self.assertEqual(mcp.handle(headers, body)[1]["error"]["code"], -32022)
+
+    def test_mcp_2025_11_25_initialize_list_call_and_notification(self):
+        mcp = AgentXMcp(self.controller)
+        headers, body = legacy_mcp_message(
+            "initialize",
+            {
+                "protocolVersion": LEGACY_PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": {"name": "conformance-test", "version": "1.0"},
+            },
+        )
+        status, response = mcp.handle(headers, body)
+        self.assertEqual(status, 200)
+        self.assertEqual(response["result"]["protocolVersion"], LEGACY_PROTOCOL_VERSION)
+        self.assertEqual(
+            response["result"]["capabilities"]["tools"], {"listChanged": False}
+        )
+        self.assertNotIn("resultType", response["result"])
+
+        headers, body = legacy_mcp_message("notifications/initialized", request_id=None)
+        self.assertEqual(mcp.handle(headers, body), (202, None))
+
+        headers, body = legacy_mcp_message("tools/list")
+        status, response = mcp.handle(headers, body)
+        self.assertEqual(status, 200)
+        self.assertEqual(len(response["result"]["tools"]), 7)
+        self.assertNotIn("ttlMs", response["result"])
+
+        headers, body = legacy_mcp_message(
+            "tools/call",
+            {
+                "name": "plan_agentx_benchmark",
+                "arguments": request().model_dump(mode="json"),
+            },
+        )
+        status, response = mcp.handle(headers, body)
+        self.assertEqual(status, 200)
+        self.assertFalse(response["result"]["isError"])
+        self.assertEqual(response["result"]["structuredContent"]["job_count"], 1)
+
+    def test_mcp_2025_11_25_negotiates_and_supports_ping(self):
+        mcp = AgentXMcp(self.controller)
+        headers, body = legacy_mcp_message(
+            "initialize",
+            {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "old", "version": "1"},
+            },
+        )
+        status, response = mcp.handle(headers, body)
+        self.assertEqual(status, 200)
+        self.assertEqual(response["result"]["protocolVersion"], LEGACY_PROTOCOL_VERSION)
+
+        headers, body = legacy_mcp_message("ping")
+        self.assertEqual(mcp.handle(headers, body)[1]["result"], {})
 
     def test_http_bearer_authentication_fails_closed(self):
         self.assertTrue(authorized("Bearer secret", "secret"))
@@ -1104,6 +1175,16 @@ class ServiceTests(unittest.TestCase):
         self.assertTrue(response["result"]["isError"])
         self.assertEqual(response["result"]["structuredContent"]["maximum_bytes"], 4096)
         self.assertNotIn("x" * 100, json.dumps(response))
+
+        for message_factory in (mcp_message, legacy_mcp_message):
+            headers, body = message_factory("tools/list")
+            response = mcp.handle(headers, body)[1]
+            encoded = json.dumps(response, separators=(",", ":")).encode()
+            self.assertLessEqual(len(encoded), 4096)
+            self.assertTrue(response["result"]["isError"])
+            self.assertEqual(
+                response["result"]["structuredContent"]["maximum_bytes"], 4096
+            )
 
     def test_report_and_artifact_listing_are_hashed_and_bounded_by_type(self):
         record = self.controller.submit(request())

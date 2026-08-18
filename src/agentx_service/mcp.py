@@ -13,6 +13,8 @@ from .controller import BenchmarkController
 from .models import BenchmarkRequest, RunId, RunState, StrictModel
 
 PROTOCOL_VERSION = "2026-07-28"
+LEGACY_PROTOCOL_VERSION = "2025-11-25"
+SUPPORTED_PROTOCOL_VERSIONS = (PROTOCOL_VERSION, LEGACY_PROTOCOL_VERSION)
 PROTOCOL_META = "io.modelcontextprotocol/protocolVersion"
 CAPABILITIES_META = "io.modelcontextprotocol/clientCapabilities"
 CLIENT_INFO_META = "io.modelcontextprotocol/clientInfo"
@@ -138,7 +140,7 @@ class AgentXMcp:
 
     def handle(
         self, headers: dict[str, str], message: Any
-    ) -> tuple[int, dict[str, Any]]:
+    ) -> tuple[int, dict[str, Any] | None]:
         normalized = {key.lower(): value for key, value in headers.items()}
         origin = normalized.get("origin")
         if origin and origin not in self.allowed_origins:
@@ -154,6 +156,10 @@ class AgentXMcp:
             return self._error(None, -32600, "Invalid Request", 400)
         request_id = message.get("id")
         params = message.get("params", {})
+        method = message.get("method")
+        requested_header = normalized.get("mcp-protocol-version")
+        if method == "initialize" or requested_header == LEGACY_PROTOCOL_VERSION:
+            return self._handle_legacy(message, params, request_id, method)
         if (
             message.get("jsonrpc") != "2.0"
             or isinstance(request_id, bool)
@@ -214,7 +220,7 @@ class AgentXMcp:
             return 200, self._result(
                 request_id,
                 {
-                    "supportedVersions": [PROTOCOL_VERSION],
+                    "supportedVersions": list(SUPPORTED_PROTOCOL_VERSIONS),
                     "capabilities": {"tools": {}},
                     "instructions": "Plan before submitting; inspect queue coverage and use reports rather than raw traces.",
                     "ttlMs": 300000,
@@ -229,7 +235,7 @@ class AgentXMcp:
                     "Invalid params: this tool list is not paginated",
                     400,
                 )
-            return 200, self._result(
+            response = self._result(
                 request_id,
                 {
                     "tools": [tool.definition() for tool in self.tools],
@@ -237,6 +243,7 @@ class AgentXMcp:
                     "cacheScope": "private",
                 },
             )
+            return 200, self._bounded_response(request_id, response, legacy=False)
         if method != "tools/call":
             return self._error(request_id, -32601, f"Method not found: {method}", 404)
         arguments = params.get("arguments", {})
@@ -245,9 +252,95 @@ class AgentXMcp:
             return self._error(
                 request_id, -32602, f"Unknown or invalid tool: {body_name}", 400
             )
+        payload = self._call_tool(tool, arguments)
+        response = self._result(request_id, payload)
+        return 200, self._bounded_response(request_id, response, legacy=False)
+
+    def _handle_legacy(
+        self,
+        message: dict[str, Any],
+        params: Any,
+        request_id: Any,
+        method: Any,
+    ) -> tuple[int, dict[str, Any] | None]:
+        """Serve the initialize-era, stateless MCP Streamable HTTP profile."""
+        if (
+            message.get("jsonrpc") != "2.0"
+            or not isinstance(method, str)
+            or not isinstance(params, dict)
+        ):
+            return self._error(None, -32600, "Invalid Request", 400)
+
+        # JSON-RPC notifications intentionally have no response body. The service
+        # has no subscriptions, cancellation side effects, or session state.
+        if "id" not in message:
+            return 202, None
+        if isinstance(request_id, bool) or not isinstance(request_id, (str, int)):
+            return self._error(None, -32600, "Invalid Request", 400)
+
+        if method == "initialize":
+            requested = params.get("protocolVersion")
+            capabilities = params.get("capabilities")
+            client_info = params.get("clientInfo")
+            if (
+                not isinstance(requested, str)
+                or not isinstance(capabilities, dict)
+                or not isinstance(client_info, dict)
+                or not isinstance(client_info.get("name"), str)
+                or not isinstance(client_info.get("version"), str)
+            ):
+                return self._error(
+                    request_id,
+                    -32602,
+                    "Invalid params: protocol version or client information is missing",
+                    400,
+                    {
+                        "supported": list(SUPPORTED_PROTOCOL_VERSIONS),
+                        "requested": requested,
+                    },
+                )
+            return 200, self._legacy_result(
+                request_id,
+                {
+                    "protocolVersion": LEGACY_PROTOCOL_VERSION,
+                    "capabilities": {"tools": {"listChanged": False}},
+                    "serverInfo": {"name": "agentx-benchmark", "version": "0.1.0"},
+                    "instructions": "Plan before submitting; inspect queue coverage and use reports rather than raw traces.",
+                },
+            )
+
+        if method == "ping":
+            return 200, self._legacy_result(request_id, {})
+        if method == "tools/list":
+            if params.get("cursor") is not None:
+                return self._error(
+                    request_id,
+                    -32602,
+                    "Invalid params: this tool list is not paginated",
+                    200,
+                )
+            response = self._legacy_result(
+                request_id, {"tools": [tool.definition() for tool in self.tools]}
+            )
+            return 200, self._bounded_response(request_id, response, legacy=True)
+        if method != "tools/call":
+            return self._error(request_id, -32601, f"Method not found: {method}", 200)
+
+        name = params.get("name")
+        arguments = params.get("arguments", {})
+        tool = next((item for item in self.tools if item.name == name), None)
+        if tool is None or not isinstance(arguments, dict):
+            return self._error(
+                request_id, -32602, f"Unknown or invalid tool: {name}", 200
+            )
+        payload = self._call_tool(tool, arguments)
+        response = self._legacy_result(request_id, payload)
+        return 200, self._bounded_response(request_id, response, legacy=True)
+
+    def _call_tool(self, tool: Tool, arguments: dict[str, Any]) -> dict[str, Any]:
         try:
             value = tool.handler(arguments)
-            payload = {
+            return {
                 "content": [
                     {
                         "type": "text",
@@ -258,33 +351,35 @@ class AgentXMcp:
                 "isError": False,
             }
         except Exception as error:  # noqa: BLE001 - isolate tool failures.
-            value = {"error": str(error)}
-            payload = {
+            return {
                 "content": [{"type": "text", "text": str(error)}],
-                "structuredContent": value,
+                "structuredContent": {"error": str(error)},
                 "isError": True,
             }
-        response = self._result(request_id, payload)
+
+    def _bounded_response(
+        self, request_id: str | int, response: dict[str, Any], *, legacy: bool
+    ) -> dict[str, Any]:
         encoded = json.dumps(response, default=str, separators=(",", ":")).encode()
         maximum = self.controller.config.limits.maximum_mcp_result_bytes
-        if len(encoded) > maximum:
-            response = self._result(
-                request_id,
+        if len(encoded) <= maximum:
+            return response
+        payload = {
+            "content": [
                 {
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "tool result exceeds the configured MCP response limit",
-                        }
-                    ],
-                    "structuredContent": {
-                        "size_bytes": len(encoded),
-                        "maximum_bytes": maximum,
-                    },
-                    "isError": True,
-                },
-            )
-        return 200, response
+                    "type": "text",
+                    "text": "tool result exceeds the configured MCP response limit",
+                }
+            ],
+            "structuredContent": {
+                "size_bytes": len(encoded),
+                "maximum_bytes": maximum,
+            },
+            "isError": True,
+        }
+        if legacy:
+            return self._legacy_result(request_id, payload)
+        return self._result(request_id, payload)
 
     @staticmethod
     def _validated(model, arguments):
@@ -351,6 +446,10 @@ class AgentXMcp:
                 },
             },
         }
+
+    @staticmethod
+    def _legacy_result(request_id, result):
+        return {"jsonrpc": "2.0", "id": request_id, "result": result}
 
     @staticmethod
     def _error(request_id, code, message, status, data=None):
