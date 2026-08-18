@@ -129,7 +129,13 @@ def serve(host: str = "0.0.0.0", port: int = 8080) -> None:
                 )
                 return
             status, response = mcp.handle(dict(self.headers.items()), message)
-            self._json(status, response)
+            if response is None:
+                self.send_response(status)
+                self.send_header("content-length", "0")
+                self.send_header("cache-control", "no-store")
+                self.end_headers()
+            else:
+                self._json(status, response)
 
         def _json(self, status: int, value) -> None:
             payload = json.dumps(value, default=str, separators=(",", ":")).encode()

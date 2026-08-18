@@ -2,6 +2,9 @@
 
 AIPerf AgentX-MVP benchmark harness for llm-d/manifesto deployments with prefill/decode disaggregation.
 
+The service branch exposes the same bounded benchmark tools over MCP
+`2025-11-25` and `2026-07-28`; see `docs/agentx-service.md`.
+
 The repository also ships a bounded, durable MCP benchmark service. Start
 with [the service contract and deployment guide](docs/agentx-service.md).
 

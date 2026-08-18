@@ -81,12 +81,17 @@ read or modify controller state, other attempts, canonical data, or reports.
 
 ## MCP contract
 
-The only MCP endpoint is stateless authenticated `POST /mcp`, protocol
-`2026-07-28`. Every request requires `Authorization: Bearer <token>` from the
-`agentx-service-auth` Secret.
-Every request supplies per-request metadata and matching
-`MCP-Protocol-Version`, `Mcp-Method`, and, for calls, `Mcp-Name` headers. There
-is no `initialize`, session identifier, GET event stream, or legacy fallback.
+The only MCP endpoint is authenticated `POST /mcp`. It supports both the
+initialize-era `2025-11-25` Streamable HTTP protocol and the stateless
+`2026-07-28` protocol. Every request requires `Authorization: Bearer <token>`
+from the `agentx-service-auth` Secret.
+
+`2025-11-25` clients initialize normally and then send
+`MCP-Protocol-Version: 2025-11-25`. The server does not allocate an optional
+session identifier and returns JSON responses rather than an SSE stream.
+`2026-07-28` requests supply per-request metadata and matching
+`MCP-Protocol-Version`, `Mcp-Method`, and, for calls, `Mcp-Name` headers. Both
+protocols expose the same tools and controller behavior.
 Explicit browser origins are denied unless `AGENTX_ALLOWED_ORIGINS` names them.
 
 The tools are:
@@ -162,6 +167,16 @@ curl -sS http://agentx-service.vllm.svc.cluster.local:8080/mcp \
   -H 'Mcp-Method: tools/call' \
   -H 'Mcp-Name: plan_agentx_benchmark' \
   --data-binary @examples/mcp-plan-kimi-k3-a100.json
+```
+
+Initialize-era clients begin with:
+
+```bash
+curl -sS http://agentx-service.vllm.svc.cluster.local:8080/mcp \
+  -H "Authorization: Bearer $AGENTX_API_TOKEN" \
+  -H 'content-type: application/json' \
+  -H 'accept: application/json, text/event-stream' \
+  --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"example","version":"1"}}}'
 ```
 
 ## Lifecycle, reports, and migration
