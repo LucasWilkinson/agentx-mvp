@@ -1,172 +1,139 @@
-# AgentX-MVP Benchmark
+# GLM-5.2 AgentX benchmark
 
-AIPerf AgentX-MVP benchmark harness for llm-d/manifesto deployments with prefill/decode disaggregation.
+A thin Kubernetes harness for benchmarking GLM-5.2 variants with AgentX and
+monitoring vLLM prefill/decode deployments in Grafana.
 
-The service branch exposes the same bounded benchmark tools over MCP
-`2025-11-25` and `2026-07-28`; see `docs/agentx-service.md`.
+## Setup
 
-The repository also ships a bounded, durable MCP benchmark service. Start
-with [the service contract and deployment guide](docs/agentx-service.md).
-
-## Prerequisites
-
-- `kubectl` configured for your cluster
-- Kueue installed in the cluster
-- `AGENTX_API_TOKEN` set for service deployment and MCP clients
-- an operator-provisioned ReadWriteMany results PVC matching the service
-  manifest and operator configuration (`agentx-results` by default)
-
-The historical GB200 helpers additionally use a legacy `.env` file with:
-
-```
-NAMESPACE=vllm
-MANIFESTO_ROOT=$HOME/code/llm-manifesto
-MODEL_SPEC=models/deepseek-v4/3P-EP8-1D-EP8.yaml
-MANIFESTO_CLUSTER=clusters/oci-gb200.yaml
-MANIFESTO_USER=$USER
-KUEUE_QUEUE=nightly-eval
-LUSTRE_CLAIM=lustre-pvc-vllm
-LUSTRE_PREFIX=/mnt/lustre/agentx-mvp
-```
-
-These legacy defaults target `deepseek-ai/DeepSeek-V4-Pro` on the smallest
-GB200/NVL72 manifesto profile and use the existing `vllm` namespace.
-
-Legacy report/dashboard helpers read Grafana and Prometheus from:
+Requirements: `kubectl`, `helm`, `just`, `uv`, a sibling `llm-manifesto` checkout, and an RWX results PVC.
 
 ```bash
-MONITORING_NAMESPACE=vllm
-PROMETHEUS_NAMESPACE=$MONITORING_NAMESPACE
-GRAFANA_NAMESPACE=$MONITORING_NAMESPACE
+cp .env.example .env
+# Edit every REPLACE_ME value.
 ```
 
-Override these only when manifesto installs the monitoring stack somewhere else.
+The endpoint and model are inputs, so this works for FP8, MXFP4, and other
+GLM-5.2 variants without embedding cluster-specific values.
 
-## Quick start
+## Deploy the model
+
+Model servers are rendered by [llm-manifesto](https://github.com/tlrmchlsmth/llm-manifesto)
+from the catalog in `manifesto/` (`clusters/coreweave-h200.yaml`, `models/glm-5.2/*.yaml`).
+Clone it next to this repo (`MANIFESTO_ROOT`, default `../llm-manifesto`).
 
 ```bash
-just setup           # deploy the authenticated typed service
-just check           # verify the model endpoint is reachable
-just run             # submit AGENTX_REQUEST to the in-cluster typed service
-just legacy-run 256 900 # explicitly legacy positional workflow
-just smoke           # fast Kueue Job plumbing test (~60s, invalid result)
-just orchestrator-run      # submit to the durable in-cluster service
-just logs            # tail typed service logs
-just shell           # shell into the typed service
-just clean           # remove typed Jobs/service resources; preserve PVC data
+just bootstrap                          # once per namespace: hf-secret + pull secret on the default SA
+just router                             # once: llm-d router (Envoy + EPP) from deploy/router-values.yaml
+just deploy                             # MANIFESTO_SPEC from .env
+just deploy glm-5.2/p1-tp8ep-d1-dp8ep   # or any spec name
+just render                             # show what would be applied
+just teardown                           # delete the current spec's model servers (--all for everything)
 ```
 
-The orchestrator image contains this harness at `/workspace/agentx-mvp` and
-`llm-manifesto` at `/workspace/llm-manifesto`; `just orchestrator-run` does not
-copy source trees into the pod. Build it with `just orchestrator-build`.
+The router (Envoy + endpoint picker, P/D scheduling profile) is Helm-managed and selects any
+model server labelled `llm-d.ai/inferenceServing=true` owned by `MANIFESTO_USER`, so `URL`
+stays `http://<ROUTER_RELEASE>-epp:80` across specs. Manifesto's own Gateway/EPP objects are
+stripped from the render (`scripts/env.sh: render_model`). New variants are new files under
+`manifesto/models/glm-5.2/` that `extends: base.yaml`.
 
-The typed service has a separate, non-root runtime image. Build it with
-`just agentx-service-build`, publish it with `just agentx-service-push`, and
-select the deployed reference with `AGENTX_SERVICE_IMAGE`.
+Specs:
 
-## Legacy model deployment helpers
+| Spec | What it is |
+|---|---|
+| `glm-5.2/p1-tp8-d1-dp8ep` | Dev checkout (`pr8-cv2`): prefill TP8, decode DP8+EP |
+| `glm-5.2/p1-tp8ep-d1-dp8ep` | Same with EP on the prefill |
+| `glm-5.2/ref-p1w1-d1w1-mtp-offload` | The llm-d "142k + MTP + Offloading" reference config (MTP-3, NIXL + CPU KV offload, DeepEP) shrunk to 1 prefill + 1 decode pod; needs a `ve` env with DeepEP/NVSHMEM kernels |
+
+The InferencePool lists target ports 8000-8007 so every DP rank of a decode pod is an
+endpoint. The EPP assumes every pod serves all of them unless told otherwise, so
+`scripts/filter-render.py` annotates each pod with `llm-d.ai/active-ports` (its declared
+ports in that range: `8000` for single-rank pods, `8000,...,8007` for DP8 decode).
+
+Known gap: manifesto renders the decode routing sidecar with fixed flags, so the reference
+run's `--enable-prefiller-sampling` (used with MTP) is not applied. Add it upstream in
+llm-manifesto if the smoke check shows it matters.
+
+## Benchmark any vLLM build
+
+vLLM itself is not baked into an image. Pods run the `vllm-envs` CUDA toolchain image and
+activate a [`ve`](../vllm-envs) environment (a git worktree + `.venv`) from the workspace
+PVC, selected with `VLLM_ENV`. To benchmark a branch, PR, or commit:
 
 ```bash
-just legacy-setup-kueue # install/update the historical GB200 queue objects
-just start-model     # deploy the llm-manifesto spec
-just stop-model      # tear down the manifesto deployment
+../devbox.sh sh                                  # zero-GPU box with the PVC and `ve`
+ve new pr-52779 --name pcp-producers             # env under /workspace/envs/<name>
+exit
+just envs                                        # list envs and their HEADs
+VLLM_ENV=/workspace/envs/pcp-producers just deploy
+VLLM_ENV=/workspace/envs/pcp-producers just sweep pcp-producers
 ```
 
-Model deployment is Kueue-aware by default. `just start-model` renders the
-configured `llm-manifesto` spec and labels each rendered `LeaderWorkerSet` with
-`kueue.x-k8s.io/queue-name: nightly-eval`. Override with `KUEUE_QUEUE=...`.
-It does not call the `llm-manifesto` `just start` recipe.
+`just deploy` prints the vLLM version and commit actually loaded; sweeps record it in
+`results_<config>/vllm_env.txt` (env path, commit, branch, dirty files) next to
+`vllm_image.txt`. `VLLM_IMAGE` overrides the toolchain image when the Dockerfile changes.
 
-## Legacy benchmark result layout
-
-Benchmarks run as Kueue-managed `batch/v1` Jobs, not as `kubectl exec` commands
-into a long-lived AIPerf pod. Each Job mounts `LUSTRE_CLAIM` at `/mnt/lustre`
-and writes artifacts to:
+## Sweeps
 
 ```bash
-$LUSTRE_PREFIX/$MANIFESTO_USER/<result-directory>
+just sweep isl142k                                  # SWEEP_SPECS x SWEEP_CONCURRENCIES
+just sweep mtp glm-5.2/p1-tp8-d1-dp8ep              # explicit specs
+just results && just dashboard isl142k              # results/isl142k/interactivity_vs_throughput.html
 ```
 
-The local or orchestrator-side result directory receives a copy for report generation,
-but the PVC path is the durable source of truth.
+Each config gets `results_<config>/` containing `manifest.yaml`, `spec.yaml`, `config_name.txt`,
+`pods.txt`, `model_label.txt`, `vllm_image.txt`, pod `logs/`, and one `results_<config>_c<N>/`
+per concurrency. `gen_interactivity_chart.py` and `export_dashboard.py` read this layout directly.
 
-## Result Directories
-
-By default, orchestrated sweeps write under:
+## Benchmark
 
 ```bash
-results/<UTC timestamp>_<manifesto user>_<spec slug>_<duration>s/
+just benchmark
+just status
+just logs
 ```
 
-For example:
+This submits a Kubernetes Job running `inferencex-agentx-mvp` with the subagent
+trace dataset. Change `CONCURRENCY`, `DURATION_SECONDS`, or `MODEL` in `.env`
+between runs. Artifacts are durable on `RESULTS_PVC`.
+
+## Live Grafana
+
+Install a small namespace-local Prometheus and Grafana stack once:
 
 ```bash
-results/20260713T210000Z_tms_3p-ep8-1d-ep8_900s/
+just monitoring
+just monitor
 ```
 
-Inside that run root, each config gets `results_<instance>/`, and each
-concurrency level gets `results_<instance>_c<concurrency>/`. The run root also
-contains `interactivity_vs_throughput.html`.
+Open <http://127.0.0.1:3000/d/wideep-overview>. Prometheus scrapes every GLM
+prefill/decode rank. The dashboard is provisioned automatically.
 
-## Sweep
-
-The public sweep submits the strict operator/request JSON through the typed
-controller:
+## Download and share results
 
 ```bash
-just sweep
-AGENTX_REQUEST=examples/kimi-k3-a100-smoke.json just sweep
+just results
+just dashboard
+just grafana-export
 ```
 
-Historical manifesto-managed positional sweeps remain explicit compatibility
-paths:
+`just dashboard <sweep>` creates `results/<sweep>/interactivity_vs_throughput.html`, a
+self-contained comparison of the downloaded runs. `just grafana-export`
+embeds the matching Grafana time range into `dashboard.html` beside each run.
 
-```bash
-just legacy-sweep "$(just --quiet run-dir 900)" 900
-```
-
-Each sweep produces result directories like `results/<run>/results_$USER-wide-ep-3p-ep8-1d-ep8/results_$USER-wide-ep-3p-ep8-1d-ep8_c64/`, `results/<run>/results_$USER-wide-ep-3p-ep8-1d-ep8/results_$USER-wide-ep-3p-ep8-1d-ep8_c256/`, etc. Each run directory contains:
-- `profile_export_aiperf.json` — benchmark metrics
-- `profile_export.jsonl` — per-request data
-- `vllm_image.txt` — vLLM container image tag
-- `vllm_fingerprint.txt` — vLLM `system_fingerprint` from the API
-
-The parent config directory contains `manifest.yaml`, the monolithic rendered manifesto manifest used for the run.
-
-## Grafana dashboard export
-
-Export Grafana dashboards for benchmark result directories. Automatically extracts the exact time range each run executed (from `profile_export_aiperf.json` timestamps) and queries Prometheus for that window.
-
-```bash
-# Export dashboards for specific result directories
-just scrape-grafana results/<run>/results_$USER-wide-ep-3p-ep8-1d-ep8/results_$USER-wide-ep-3p-ep8-1d-ep8_c64
-
-# Or use the script directly for a single time range
-python3 export_dashboard.py single --start now-30m --end now -o report.html
-```
-
-Each result directory gets a self-contained `dashboard.html` with interactive Plotly charts mirroring the Grafana dashboard.
-
-## Dashboard overlay / comparison
-
-Overlay multiple dashboard exports onto the same charts for side-by-side comparison across concurrency levels. X-axis is rebased to relative time (seconds from start) so runs that happened at different absolute times align.
-
-```bash
-# Overlay three concurrency levels — auto-labeled from filenames
-python3 overlay_dashboards.py results/<run>/results_$USER-wide-ep-3p-ep8-1d-ep8/results_$USER-wide-ep-3p-ep8-1d-ep8_c64/dashboard.html results/<run>/results_$USER-wide-ep-3p-ep8-1d-ep8/results_$USER-wide-ep-3p-ep8-1d-ep8_c256/dashboard.html
-
-# Custom labels
-python3 overlay_dashboards.py c64.html c256.html --label "concurrency=64" --label "concurrency=256"
-```
-
-Each concurrency level gets a distinct color across all panels.
-
-## vLLM version capture
-
-Capture the vLLM version from a running deployment:
-
-```bash
-just vllm-version results/<run>/results_$USER-wide-ep-3p-ep8-1d-ep8
-```
-
-This is called automatically during sweeps.
+| Command | Purpose |
+|---|---|
+| `just bootstrap` | Namespace prerequisites (hf-secret, pull secret) |
+| `just router` | Install/upgrade the llm-d router |
+| `just envs` | List `ve` vLLM builds on the PVC |
+| `just deploy [spec]` | Deploy a manifesto spec (vLLM from `VLLM_ENV`) and wait for the router to serve it |
+| `just teardown [spec]` | Delete model servers |
+| `just sweep <name> [specs]` | Deploy + benchmark each spec at every concurrency |
+| `just benchmark` | Run AgentX against the configured GLM-5.2 model |
+| `just status` | List runs and show the latest log command |
+| `just logs` | Follow the newest benchmark run |
+| `just monitoring` | Install/update Prometheus, Grafana, and dashboard |
+| `just monitor` | Port-forward Grafana |
+| `just results` | Download artifacts from the PVC |
+| `just dashboard <sweep>` | Build a shareable HTML comparison of a sweep |
+| `just grafana-export` | Export each run's Grafana dashboard to HTML |
+| `just test` | Validate scripts and dashboard JSON |

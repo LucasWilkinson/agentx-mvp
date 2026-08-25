@@ -1,0 +1,6 @@
+# 1 prefill pod TP8 + EP + 1 decode pod DP8+EP. 16 GPUs.
+extends: base.yaml
+release: glm52-p1-tp8ep-d1-dp8ep
+roles:
+  prefill:
+    parallelism: {tp: 8, dp: 1, ep: true}

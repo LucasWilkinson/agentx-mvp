@@ -1,0 +1,61 @@
+# llm-d standalone router (Envoy + endpoint picker) in front of manifesto-rendered model servers.
+# modelServers.matchLabels.llm-d.ai/owner is set by scripts/router.sh from MANIFESTO_USER.
+router:
+  epp:
+    replicas: 1
+    flags:
+      ha-enable-leader-election: false
+    pluginsConfigFile: plugins.yaml
+    pluginsCustomConfig:
+      plugins.yaml: |
+        apiVersion: llm-d.ai/v1alpha1
+        kind: EndpointPickerConfig
+        plugins:
+          - type: disagg-headers-handler
+          - type: always-disagg-pd-decider
+          - type: disagg-profile-handler
+            parameters:
+              deciderPluginName: always-disagg-pd-decider
+          - type: prefill-filter
+          - type: decode-filter
+          - type: approx-prefix-cache-producer
+          - type: inflight-load-producer
+          - type: prefix-cache-affinity-filter
+            parameters:
+              peakPrefillThroughput: 20000
+          - type: token-load-scorer
+          - type: active-request-scorer
+          - type: max-score-picker
+        schedulingProfiles:
+          - name: prefill
+            plugins:
+              - pluginRef: prefill-filter
+              - pluginRef: prefix-cache-affinity-filter
+              - pluginRef: token-load-scorer
+              - pluginRef: max-score-picker
+          - name: decode
+            plugins:
+              - pluginRef: decode-filter
+              - pluginRef: active-request-scorer
+              - pluginRef: max-score-picker
+  extraServicePorts:
+    - name: http
+      port: 80
+      protocol: TCP
+      targetPort: 8081
+  modelServers:
+    type: vllm
+    matchLabels:
+      llm-d.ai/inferenceServing: "true"
+    # One endpoint per declared container port: DP decode pods expose ranks on 8000-8007 via
+    # the disagg sidecar; single-rank prefill/decode pods only declare 8000 and get one endpoint.
+    # With only 8000 listed, DP8 decode ran on rank 0 alone (found 2026-08-25).
+    targetPorts:
+      - number: 8000
+      - number: 8001
+      - number: 8002
+      - number: 8003
+      - number: 8004
+      - number: 8005
+      - number: 8006
+      - number: 8007

@@ -1,0 +1,78 @@
+# Shared GLM-5.2 P/D base. Variants override roles/parallelism only.
+# The vLLM build comes from a vllm-envs (`ve`) env on the workspace PVC (VLLM_ENV in .env,
+# rendered as --dev-venv); model.image is only the CUDA toolchain image (override: VLLM_IMAGE).
+# Decode: TP1 x DP8 + EP behind the llm-d disagg routing sidecar. KV moves via NIXL.
+# No enforce_eager anywhere: CUDA graphs + torch.compile stay on (PCP variants only drop cudagraphs on prefill).
+topology: pd
+model:
+  id: zai-org/GLM-5.2-FP8
+  label: GLM-5.2-FP8
+  image: quay.io/rh-ee-lwilkins/vllm-envs-cuda:pr8-cv2
+routing: {kind: pd, target_role: decode}
+runtime:
+  dev: true
+  sidecars: []
+  env:
+    # Keep Triton's kernel cache off the shared PVC: concurrent pods on different nodes hit
+    # NFS "Stale file handle" errors reading it (seen 2026-08-25, p1-tp8ep-d1-tp8ep decode).
+    TRITON_CACHE_DIR: /tmp/triton-cache
+    # Make the memory profiler reserve room for CUDA graph capture (as in the reference runs); without it
+    # the prefill OOMed in sampler graph capture right after the KV cache filled the GPU (2026-08-25).
+    VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS: "1"
+vars:
+  common_vllm: &common_vllm
+    trust_remote_code: true
+    # 142k benchmark cap (aiperf MAX_CONTEXT_LENGTH in .env) + output. Not -1/auto: the profile run then sizes the
+    # sparse-attention indexer for 1M tokens and eats KV memory (PCP prefill auto-fit fell to 114k, 2026-08-25).
+    max_model_len: 163840   # the benchmark's ISL cap is aiperf's MAX_CONTEXT_LENGTH (.env)
+    kv_cache_dtype: fp8
+    moe_backend: deep_gemm
+    safetensors_load_strategy: prefetch
+    seed: 0
+    disable_uvicorn_access_log: true
+roles:
+  - name: prefill
+    parallelism: {tp: 8, dp: 1, ep: false}
+    # KV offloading to CPU as in the reference "+ Offloading" runs: the OffloadingConnector's region is an mmap
+    # under /dev/shm sized cpu_bytes_to_use (100 GiB), so /dev/shm and the pod memory limit must be large;
+    # a 128Gi shm made madvise(POPULATE_WRITE) fail with "Bad address" (2026-08-25).
+    resources: {memory: 1500Gi}
+    shm_size: 1500Gi
+    kv_transfer_config:
+      kv_connector: MultiConnector
+      kv_role: kv_both
+      kv_load_failure_policy: fail
+      kv_connector_extra_config:
+        connectors:
+          # kv_producer (not kv_both as in the reference): NixlConnector under PCP only supports the producer role.
+          - {kv_connector: NixlConnector, kv_role: kv_producer, kv_connector_extra_config: {enforce_handshake_compat: false}}
+          - kv_connector: OffloadingConnector
+            kv_role: kv_both
+            kv_connector_extra_config: {spec_name: TieringOffloadingSpec, cpu_bytes_to_use: 107374182400, eviction_policy: lru}
+    vllm:
+      <<: *common_vllm
+      max_num_batched_tokens: 8192
+      gpu_memory_utilization: "0.90"
+    # No CUDA graphs on prefill while offloading is on: the OffloadingConnector's copy stream breaks graph
+    # capture ("capturing stream has unjoined work", DP8 prefill, 2026-08-25). Prefill is compute-bound anyway.
+    vllm_raw_args: [-cc.cudagraph_mode=NONE]
+  - name: decode
+    parallelism: {tp: 1, dp: 8, ep: true}
+    routing_proxy: true
+    dp_load_balancing: external
+    kv_transfer_config: {kv_connector: NixlConnector, kv_role: kv_consumer, kv_connector_extra_config: {enforce_handshake_compat: false}}
+    # DeepEP low-latency needs NVSHMEM (IBGDA over the ibp* HCAs). QP depth = (max_num_batched_tokens + 1) * 2.
+    env:
+      NVSHMEM_REMOTE_TRANSPORT: ibgda
+      NVSHMEM_IB_ENABLE_IBGDA: "true"
+      NVSHMEM_HCA_PREFIX: ibp
+      NVSHMEM_BOOTSTRAP_UID_SOCK_IFNAME: eth0
+      NVIDIA_GDRCOPY: enabled
+      NVSHMEM_QP_DEPTH: "130"
+    vllm:
+      <<: *common_vllm
+      # Decode-tuned like the reference runs: tiny per-rank batches, DeepEP low-latency dispatch.
+      gpu_memory_utilization: "0.95"
+      all2all_backend: deepep_low_latency
+      max_num_batched_tokens: 64
+      max_num_seqs: 64

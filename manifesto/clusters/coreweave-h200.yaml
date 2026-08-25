@@ -1,0 +1,49 @@
+# CoreWeave H200 (8 GPU / node, InfiniBand RDMA). Paths use {user} from --user.
+name: coreweave-h200
+gpus_per_node: 8
+accelerators:
+  default: h200
+  profiles:
+    h200:
+      resource_name: nvidia.com/gpu
+      presence_label: gpu.nvidia.com/class
+      gpu_arch: h200
+      torch_cuda_arch_list: "9.0+PTX"
+storage:
+  shared_volume:
+    persistentVolumeClaim:
+      claimName: workspace-lwilkinson
+  shared_mount_path: /workspace
+paths:
+  user_root: /workspace/{user}
+model_server_resources:
+  cpu_per_gpu: "4"
+  memory_per_gpu: 64Gi
+rdma:
+  resource_name: rdma/ib
+  value: "8"
+pod_defaults:
+  shm_size: 128Gi
+  container_security_context: {runAsUser: 0}
+  extra_volumes:
+    - {name: hf, persistentVolumeClaim: {claimName: hf-cache}}
+  extra_volume_mounts:
+    - {name: hf, mountPath: /models}
+dev:
+  venv: /workspace/vdptest/vllm-main/.venv
+  source: /workspace/vdptest/vllm-main
+fabric:
+  ucx_net_devices: ""
+  profiles:
+    standard: {}
+  default_env:
+    NCCL_IB_HCA: ibp
+    NCCL_SOCKET_IFNAME: eth0
+    GLOO_SOCKET_IFNAME: eth0
+    VLLM_SKIP_P2P_CHECK: "1"
+    VLLM_USE_V2_MODEL_RUNNER: "1"
+    HF_HOME: /models/hf
+llm_d:
+  release: v0.9.0
+  images:
+    routing_sidecar: ghcr.io/llm-d/llm-d-router-disagg-sidecar:{release}

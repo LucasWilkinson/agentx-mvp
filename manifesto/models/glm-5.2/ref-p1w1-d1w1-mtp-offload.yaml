@@ -1,0 +1,82 @@
+# Reconstruction of the "142k + MTP + Offloading" reference config from
+# ~/Downloads/GLM-5.2 results (llm-d wide-ep guide, upstream vllm-openai image),
+# shrunk to one prefill pod + one decode pod so it fits two 8xH200 nodes.
+# Reference: prefill p1w1 = 1 pod DP8+EP; decode d1w2 = 2-node DP16 -> here d1w1 = DP8.
+# Differences vs the reference run, on purpose:
+#   - runs the vLLM build from VLLM_ENV (vllm-envs) instead of the reference nightly image
+#     (dd72658e, no longer on Docker Hub). Upstream v0.27.1 crashed in the prefill's
+#     TieringOffloadingSpec (SharedOffloadRegion.madvise: Bad address) on 2026-08-25.
+#   - decode MAX_TOKENS = MAX_TOKENS_PER_NODE(32) * 1 node = 32.
+#   - the decode sidecar flag --enable-prefiller-sampling is not expressible in manifesto (see README).
+release: glm52-ref-p1w1-d1w1-mtp-offload
+topology: pd
+model:
+  id: zai-org/GLM-5.2-FP8
+  label: GLM-5.2-FP8
+  image: quay.io/rh-ee-lwilkins/vllm-envs-cuda:pr8-cv2
+routing: {kind: pd, target_role: decode}
+runtime:
+  dev: true
+  sidecars: []
+  env:
+    VLLM_USE_DEEP_GEMM: "1"
+    VLLM_RANDOMIZE_DP_DUMMY_INPUTS: "1"
+    VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS: "1"
+    VLLM_HTTP_TIMEOUT_KEEP_ALIVE: "120"
+    VLLM_LOGGING_LEVEL: INFO
+    TRITON_LIBCUDA_PATH: /usr/lib64
+    NVIDIA_GDRCOPY: enabled
+    NVSHMEM_REMOTE_TRANSPORT: ibgda
+    NVSHMEM_IB_ENABLE_IBGDA: "true"
+    NVSHMEM_BOOTSTRAP_UID_SOCK_IFNAME: eth0
+    NVSHMEM_HCA_PREFIX: ibp
+    PYTHONHASHSEED: "0"
+  pre_launch:
+    - find /dev/shm -type f -delete
+vars:
+  common_vllm: &common_vllm
+    trust_remote_code: true
+    max_model_len: auto
+    kv_cache_dtype: fp8
+    speculative_config: {method: mtp, num_speculative_tokens: 3}
+    moe_backend: deep_gemm
+    reasoning_parser: glm45
+    tool_call_parser: glm47
+    enable_auto_tool_choice: true
+    disable_access_log_for_endpoints: /health,/metrics
+roles:
+  - name: prefill
+    parallelism: {tp: 1, dp: 8, ep: true}
+    dp_load_balancing: external
+    resources: {cpu: "64", memory: 1500Gi}
+    shm_size: 1500Gi   # reference run; the CPU offload region lives in /dev/shm
+    env: {VLLM_SERVER_DEV_MODE: "1"}
+    kv_transfer_config:
+      kv_connector: MultiConnector
+      kv_role: kv_both
+      kv_load_failure_policy: fail
+      kv_connector_extra_config:
+        connectors:
+          - {kv_connector: NixlConnector, kv_role: kv_both}
+          - kv_connector: OffloadingConnector
+            kv_role: kv_both
+            kv_connector_extra_config: {spec_name: TieringOffloadingSpec, cpu_bytes_to_use: 107374182400, eviction_policy: lru}
+    vllm:
+      <<: *common_vllm
+      gpu_memory_utilization: "0.935"
+      max_num_batched_tokens: 2048
+      all2all_backend: deepep_high_throughput
+  - name: decode
+    parallelism: {tp: 1, dp: 8, ep: true}
+    routing_proxy: true
+    dp_load_balancing: external
+    resources: {cpu: "32", memory: 512Gi}
+    shm_size: 1500Gi
+    env: {NVSHMEM_QP_DEPTH: "66"}   # (MAX_BATCHED_TOKENS + 1) * 2
+    kv_transfer_config: {kv_connector: NixlConnector, kv_role: kv_both, kv_load_failure_policy: fail}
+    vllm:
+      <<: *common_vllm
+      gpu_memory_utilization: "0.95"
+      max_num_batched_tokens: 32
+      max_num_seqs: 32
+      all2all_backend: deepep_low_latency

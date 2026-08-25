@@ -44,7 +44,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "PBFA97CFB590B2093"
       },
       "description": "Total generation token throughput across all vLLM instances (tokens per second)",
       "fieldConfig": {
@@ -130,10 +130,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "sum(rate(vllm:generation_tokens_total{job=\"vllm-decode\", pod=~\"${deployment}-.*\"}[10s]))",
+          "expr": "sum(rate(vllm:generation_tokens_total{job=\"vllm-decode\", pod=~\"${deployment}.*\"}[10s]))",
           "instant": false,
           "legendFormat": "Generation Throughput",
           "range": true,
@@ -146,7 +146,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "PBFA97CFB590B2093"
       },
       "description": "Total running requests across all vLLM instances",
       "fieldConfig": {
@@ -231,10 +231,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "sum(vllm:num_requests_running{pod=~\"${deployment}-.*\"})",
+          "expr": "sum(vllm:num_requests_running{pod=~\"${deployment}.*\"})",
           "instant": false,
           "legendFormat": "Running Requests",
           "range": true,
@@ -247,7 +247,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "PBFA97CFB590B2093"
       },
       "description": "Total token throughput across all prefill workers",
       "fieldConfig": {
@@ -333,10 +333,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "sum(rate(vllm:prompt_tokens_total{job=\"vllm-prefill\", pod=~\"${deployment}-.*\"}[10s]))",
+          "expr": "sum(rate(vllm:prompt_tokens_total{job=\"vllm-prefill\", pod=~\"${deployment}.*\"}[10s]))",
           "instant": false,
           "legendFormat": "Total Prefill Prompt Throughput",
           "range": true,
@@ -362,7 +362,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "PBFA97CFB590B2093"
       },
       "description": "Time to first token latency percentiles",
       "fieldConfig": {
@@ -448,10 +448,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.10, sum(rate(vllm:time_to_first_token_seconds_bucket{pod=~\"${deployment}-.*\"}[10s])) by (le))",
+          "expr": "histogram_quantile(0.10, sum(rate(vllm:time_to_first_token_seconds_bucket{pod=~\"${deployment}.*\"}[10s])) by (le))",
           "instant": false,
           "legendFormat": "p10",
           "range": true,
@@ -460,10 +460,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum(rate(vllm:time_to_first_token_seconds_bucket{pod=~\"${deployment}-.*\"}[10s])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(rate(vllm:time_to_first_token_seconds_bucket{pod=~\"${deployment}.*\"}[10s])) by (le))",
           "instant": false,
           "legendFormat": "p50",
           "range": true,
@@ -472,10 +472,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(vllm:time_to_first_token_seconds_bucket{pod=~\"${deployment}-.*\"}[10s])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(vllm:time_to_first_token_seconds_bucket{pod=~\"${deployment}.*\"}[10s])) by (le))",
           "instant": false,
           "legendFormat": "p95",
           "range": true,
@@ -484,10 +484,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(vllm:time_to_first_token_seconds_bucket{pod=~\"${deployment}-.*\"}[10s])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(vllm:time_to_first_token_seconds_bucket{pod=~\"${deployment}.*\"}[10s])) by (le))",
           "instant": false,
           "legendFormat": "p99",
           "range": true,
@@ -500,7 +500,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "PBFA97CFB590B2093"
       },
       "description": "Prompt token throughput on prefill workers (tokens per second)",
       "fieldConfig": {
@@ -586,10 +586,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "rate(vllm:prompt_tokens_total{job=\"vllm-prefill\", pod=~\"${deployment}-.*\"}[10s])",
+          "expr": "rate(vllm:prompt_tokens_total{job=\"vllm-prefill\", pod=~\"${deployment}.*\"}[10s])",
           "instant": false,
           "legendFormat": "{{pod}}-r{{rank}}",
           "range": true,
@@ -602,7 +602,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "PBFA97CFB590B2093"
       },
       "description": "Number of requests running on prefill workers",
       "fieldConfig": {
@@ -687,10 +687,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "vllm:num_requests_running{job=\"vllm-prefill\", pod=~\"${deployment}-.*\"}",
+          "expr": "vllm:num_requests_running{job=\"vllm-prefill\", pod=~\"${deployment}.*\"}",
           "instant": false,
           "legendFormat": "{{pod}}-r{{rank}}",
           "range": true,
@@ -703,7 +703,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "PBFA97CFB590B2093"
       },
       "description": "Number of requests waiting in prefill worker queues",
       "fieldConfig": {
@@ -788,10 +788,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "vllm:num_requests_waiting{job=\"vllm-prefill\", pod=~\"${deployment}-.*\"}",
+          "expr": "vllm:num_requests_waiting{job=\"vllm-prefill\", pod=~\"${deployment}.*\"}",
           "instant": false,
           "legendFormat": "{{pod}}-r{{rank}}",
           "range": true,
@@ -804,7 +804,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "PBFA97CFB590B2093"
       },
       "description": "KV cache utilization percentage on prefill workers",
       "fieldConfig": {
@@ -899,10 +899,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "vllm:kv_cache_usage_perc{job=\"vllm-prefill\", pod=~\"${deployment}-.*\"}",
+          "expr": "vllm:kv_cache_usage_perc{job=\"vllm-prefill\", pod=~\"${deployment}.*\"}",
           "instant": false,
           "legendFormat": "{{pod}}-r{{rank}}",
           "range": true,
@@ -928,7 +928,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "PBFA97CFB590B2093"
       },
       "description": "Inter-token latency (time between tokens) percentiles",
       "fieldConfig": {
@@ -1014,10 +1014,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.10, sum(rate(vllm:inter_token_latency_seconds_bucket{pod=~\"${deployment}-.*\"}[10s])) by (le))",
+          "expr": "histogram_quantile(0.10, sum(rate(vllm:inter_token_latency_seconds_bucket{pod=~\"${deployment}.*\"}[10s])) by (le))",
           "instant": false,
           "legendFormat": "p10",
           "range": true,
@@ -1026,10 +1026,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum(rate(vllm:inter_token_latency_seconds_bucket{pod=~\"${deployment}-.*\"}[10s])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(rate(vllm:inter_token_latency_seconds_bucket{pod=~\"${deployment}.*\"}[10s])) by (le))",
           "instant": false,
           "legendFormat": "p50",
           "range": true,
@@ -1038,10 +1038,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(vllm:inter_token_latency_seconds_bucket{pod=~\"${deployment}-.*\"}[10s])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(vllm:inter_token_latency_seconds_bucket{pod=~\"${deployment}.*\"}[10s])) by (le))",
           "instant": false,
           "legendFormat": "p95",
           "range": true,
@@ -1050,10 +1050,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(vllm:inter_token_latency_seconds_bucket{pod=~\"${deployment}-.*\"}[10s])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(vllm:inter_token_latency_seconds_bucket{pod=~\"${deployment}.*\"}[10s])) by (le))",
           "instant": false,
           "legendFormat": "p99",
           "range": true,
@@ -1066,7 +1066,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "PBFA97CFB590B2093"
       },
       "description": "Token throughput on decode workers (tokens per second)",
       "fieldConfig": {
@@ -1152,10 +1152,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "rate(vllm:generation_tokens_total{job=\"vllm-decode\", pod=~\"${deployment}-.*\"}[10s])",
+          "expr": "rate(vllm:generation_tokens_total{job=\"vllm-decode\", pod=~\"${deployment}.*\"}[10s])",
           "instant": false,
           "legendFormat": "{{pod}}-r{{rank}}",
           "range": true,
@@ -1168,7 +1168,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "PBFA97CFB590B2093"
       },
       "description": "Number of requests running on decode workers",
       "fieldConfig": {
@@ -1253,10 +1253,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "vllm:num_requests_running{job=\"vllm-decode\", pod=~\"${deployment}-.*\"}",
+          "expr": "vllm:num_requests_running{job=\"vllm-decode\", pod=~\"${deployment}.*\"}",
           "instant": false,
           "legendFormat": "{{pod}}-r{{rank}}",
           "range": true,
@@ -1269,7 +1269,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "PBFA97CFB590B2093"
       },
       "description": "Number of requests waiting in decode worker queues",
       "fieldConfig": {
@@ -1354,10 +1354,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "vllm:num_requests_waiting{job=\"vllm-decode\", pod=~\"${deployment}-.*\"}",
+          "expr": "vllm:num_requests_waiting{job=\"vllm-decode\", pod=~\"${deployment}.*\"}",
           "instant": false,
           "legendFormat": "{{pod}}-r{{rank}}",
           "range": true,
@@ -1370,7 +1370,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "PBFA97CFB590B2093"
       },
       "description": "KV cache utilization percentage on decode workers",
       "fieldConfig": {
@@ -1465,10 +1465,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "vllm:kv_cache_usage_perc{job=\"vllm-decode\", pod=~\"${deployment}-.*\"}",
+          "expr": "vllm:kv_cache_usage_perc{job=\"vllm-decode\", pod=~\"${deployment}.*\"}",
           "instant": false,
           "legendFormat": "{{pod}}-r{{rank}}",
           "range": true,
@@ -1481,7 +1481,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "PBFA97CFB590B2093"
       },
       "description": "CUDA graph runtime mode per engine iteration (FULL, PIECEWISE, or NONE). Shows the rate of iterations by mode across decode pods.",
       "fieldConfig": {
@@ -1565,10 +1565,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "sum by (runtime_mode) (rate(vllm:cudagraph_iterations_total{job=\"vllm-decode\", pod=~\"${deployment}-.*\"}[1m]))",
+          "expr": "sum by (runtime_mode) (rate(vllm:cudagraph_iterations_total{job=\"vllm-decode\", pod=~\"${deployment}.*\"}[1m]))",
           "instant": false,
           "legendFormat": "{{runtime_mode}}",
           "range": true,
@@ -1581,7 +1581,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "PBFA97CFB590B2093"
       },
       "description": "Average prompt tokens computed locally per successful decode request. Non-zero values indicate decode instances are computing prefills themselves instead of receiving KV caches from prefill instances.",
       "fieldConfig": {
@@ -1666,10 +1666,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "sum by(job)(rate(vllm:prompt_tokens_by_source_total{job=\"vllm-decode\", source=\"local_compute\", pod=~\"${deployment}-.*\"}[5m]))\n/\nsum by(job)(rate(vllm:request_success_total{job=\"vllm-decode\", pod=~\"${deployment}-.*\"}[5m]))",
+          "expr": "sum by(job)(rate(vllm:prompt_tokens_by_source_total{job=\"vllm-decode\", source=\"local_compute\", pod=~\"${deployment}.*\"}[5m]))\n/\nsum by(job)(rate(vllm:request_success_total{job=\"vllm-decode\", pod=~\"${deployment}.*\"}[5m]))",
           "instant": false,
           "legendFormat": "prompt tokens/req (local compute)",
           "range": true,
@@ -1682,7 +1682,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "PBFA97CFB590B2093"
       },
       "description": "Rate of request preemptions (evictions from KV cache under memory pressure)",
       "fieldConfig": {
@@ -1766,10 +1766,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "rate(vllm:num_preemptions_total{job=\"vllm-decode\", pod=~\"${deployment}-.*\"}[1m])",
+          "expr": "rate(vllm:num_preemptions_total{job=\"vllm-decode\", pod=~\"${deployment}.*\"}[1m])",
           "instant": false,
           "legendFormat": "{{pod}}-r{{rank}}",
           "range": true,
@@ -1778,10 +1778,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "rate(vllm:num_preemptions_total{job=\"vllm-prefill\", pod=~\"${deployment}-.*\"}[1m])",
+          "expr": "rate(vllm:num_preemptions_total{job=\"vllm-prefill\", pod=~\"${deployment}.*\"}[1m])",
           "instant": false,
           "legendFormat": "{{pod}}-prefill",
           "range": true,
@@ -1804,7 +1804,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "description": "Per-iteration token count distribution across decode pods (p10/p50/p99)",
           "fieldConfig": {
@@ -1872,10 +1872,10 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "PBFA97CFB590B2093"
               },
               "editorMode": "code",
-              "expr": "histogram_quantile(0.10, sum(rate(vllm:iteration_tokens_total_bucket{job=\"vllm-decode\", pod=~\"${deployment}-.*\"}[10s])) by (le))",
+              "expr": "histogram_quantile(0.10, sum(rate(vllm:iteration_tokens_total_bucket{job=\"vllm-decode\", pod=~\"${deployment}.*\"}[10s])) by (le))",
               "instant": false,
               "legendFormat": "p10",
               "range": true,
@@ -1884,10 +1884,10 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "PBFA97CFB590B2093"
               },
               "editorMode": "code",
-              "expr": "histogram_quantile(0.50, sum(rate(vllm:iteration_tokens_total_bucket{job=\"vllm-decode\", pod=~\"${deployment}-.*\"}[10s])) by (le))",
+              "expr": "histogram_quantile(0.50, sum(rate(vllm:iteration_tokens_total_bucket{job=\"vllm-decode\", pod=~\"${deployment}.*\"}[10s])) by (le))",
               "instant": false,
               "legendFormat": "p50",
               "range": true,
@@ -1896,10 +1896,10 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "PBFA97CFB590B2093"
               },
               "editorMode": "code",
-              "expr": "histogram_quantile(0.99, sum(rate(vllm:iteration_tokens_total_bucket{job=\"vllm-decode\", pod=~\"${deployment}-.*\"}[10s])) by (le))",
+              "expr": "histogram_quantile(0.99, sum(rate(vllm:iteration_tokens_total_bucket{job=\"vllm-decode\", pod=~\"${deployment}.*\"}[10s])) by (le))",
               "instant": false,
               "legendFormat": "p99",
               "range": true,
@@ -1912,7 +1912,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "description": "Per-iteration token count distribution across prefill pods (p10/p50/p99)",
           "fieldConfig": {
@@ -1980,10 +1980,10 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "PBFA97CFB590B2093"
               },
               "editorMode": "code",
-              "expr": "histogram_quantile(0.10, sum(rate(vllm:iteration_tokens_total_bucket{job=\"vllm-prefill\", pod=~\"${deployment}-.*\"}[10s])) by (le))",
+              "expr": "histogram_quantile(0.10, sum(rate(vllm:iteration_tokens_total_bucket{job=\"vllm-prefill\", pod=~\"${deployment}.*\"}[10s])) by (le))",
               "instant": false,
               "legendFormat": "p10",
               "range": true,
@@ -1992,10 +1992,10 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "PBFA97CFB590B2093"
               },
               "editorMode": "code",
-              "expr": "histogram_quantile(0.50, sum(rate(vllm:iteration_tokens_total_bucket{job=\"vllm-prefill\", pod=~\"${deployment}-.*\"}[10s])) by (le))",
+              "expr": "histogram_quantile(0.50, sum(rate(vllm:iteration_tokens_total_bucket{job=\"vllm-prefill\", pod=~\"${deployment}.*\"}[10s])) by (le))",
               "instant": false,
               "legendFormat": "p50",
               "range": true,
@@ -2004,10 +2004,10 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "PBFA97CFB590B2093"
               },
               "editorMode": "code",
-              "expr": "histogram_quantile(0.99, sum(rate(vllm:iteration_tokens_total_bucket{job=\"vllm-prefill\", pod=~\"${deployment}-.*\"}[10s])) by (le))",
+              "expr": "histogram_quantile(0.99, sum(rate(vllm:iteration_tokens_total_bucket{job=\"vllm-prefill\", pod=~\"${deployment}.*\"}[10s])) by (le))",
               "instant": false,
               "legendFormat": "p99",
               "range": true,
@@ -2020,7 +2020,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "description": "Input Sequence Length \u2014 prompt token count per request (p10/p50/p99)",
           "fieldConfig": {
@@ -2088,10 +2088,10 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "PBFA97CFB590B2093"
               },
               "editorMode": "code",
-              "expr": "histogram_quantile(0.10, sum(rate(vllm:request_prompt_tokens_bucket{pod=~\"${deployment}-.*\"}[10s])) by (le))",
+              "expr": "histogram_quantile(0.10, sum(rate(vllm:request_prompt_tokens_bucket{pod=~\"${deployment}.*\"}[10s])) by (le))",
               "instant": false,
               "legendFormat": "p10",
               "range": true,
@@ -2100,10 +2100,10 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "PBFA97CFB590B2093"
               },
               "editorMode": "code",
-              "expr": "histogram_quantile(0.50, sum(rate(vllm:request_prompt_tokens_bucket{pod=~\"${deployment}-.*\"}[10s])) by (le))",
+              "expr": "histogram_quantile(0.50, sum(rate(vllm:request_prompt_tokens_bucket{pod=~\"${deployment}.*\"}[10s])) by (le))",
               "instant": false,
               "legendFormat": "p50",
               "range": true,
@@ -2112,10 +2112,10 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "PBFA97CFB590B2093"
               },
               "editorMode": "code",
-              "expr": "histogram_quantile(0.99, sum(rate(vllm:request_prompt_tokens_bucket{pod=~\"${deployment}-.*\"}[10s])) by (le))",
+              "expr": "histogram_quantile(0.99, sum(rate(vllm:request_prompt_tokens_bucket{pod=~\"${deployment}.*\"}[10s])) by (le))",
               "instant": false,
               "legendFormat": "p99",
               "range": true,
@@ -2128,7 +2128,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "description": "Output Sequence Length \u2014 generation token count per request (p10/p50/p99)",
           "fieldConfig": {
@@ -2196,10 +2196,10 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "PBFA97CFB590B2093"
               },
               "editorMode": "code",
-              "expr": "histogram_quantile(0.10, sum(rate(vllm:request_generation_tokens_bucket{pod=~\"${deployment}-.*\"}[10s])) by (le))",
+              "expr": "histogram_quantile(0.10, sum(rate(vllm:request_generation_tokens_bucket{pod=~\"${deployment}.*\"}[10s])) by (le))",
               "instant": false,
               "legendFormat": "p10",
               "range": true,
@@ -2208,10 +2208,10 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "PBFA97CFB590B2093"
               },
               "editorMode": "code",
-              "expr": "histogram_quantile(0.50, sum(rate(vllm:request_generation_tokens_bucket{pod=~\"${deployment}-.*\"}[10s])) by (le))",
+              "expr": "histogram_quantile(0.50, sum(rate(vllm:request_generation_tokens_bucket{pod=~\"${deployment}.*\"}[10s])) by (le))",
               "instant": false,
               "legendFormat": "p50",
               "range": true,
@@ -2220,10 +2220,10 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "PBFA97CFB590B2093"
               },
               "editorMode": "code",
-              "expr": "histogram_quantile(0.99, sum(rate(vllm:request_generation_tokens_bucket{pod=~\"${deployment}-.*\"}[10s])) by (le))",
+              "expr": "histogram_quantile(0.99, sum(rate(vllm:request_generation_tokens_bucket{pod=~\"${deployment}.*\"}[10s])) by (le))",
               "instant": false,
               "legendFormat": "p99",
               "range": true,
@@ -2236,7 +2236,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "description": "Time spent in prefill phase per request (p10/p50/p99)",
           "fieldConfig": {
@@ -2304,10 +2304,10 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "PBFA97CFB590B2093"
               },
               "editorMode": "code",
-              "expr": "histogram_quantile(0.10, sum(rate(vllm:request_prefill_time_seconds_bucket{pod=~\"${deployment}-.*\"}[10s])) by (le))",
+              "expr": "histogram_quantile(0.10, sum(rate(vllm:request_prefill_time_seconds_bucket{pod=~\"${deployment}.*\"}[10s])) by (le))",
               "instant": false,
               "legendFormat": "p10",
               "range": true,
@@ -2316,10 +2316,10 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "PBFA97CFB590B2093"
               },
               "editorMode": "code",
-              "expr": "histogram_quantile(0.50, sum(rate(vllm:request_prefill_time_seconds_bucket{pod=~\"${deployment}-.*\"}[10s])) by (le))",
+              "expr": "histogram_quantile(0.50, sum(rate(vllm:request_prefill_time_seconds_bucket{pod=~\"${deployment}.*\"}[10s])) by (le))",
               "instant": false,
               "legendFormat": "p50",
               "range": true,
@@ -2328,10 +2328,10 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "PBFA97CFB590B2093"
               },
               "editorMode": "code",
-              "expr": "histogram_quantile(0.99, sum(rate(vllm:request_prefill_time_seconds_bucket{pod=~\"${deployment}-.*\"}[10s])) by (le))",
+              "expr": "histogram_quantile(0.99, sum(rate(vllm:request_prefill_time_seconds_bucket{pod=~\"${deployment}.*\"}[10s])) by (le))",
               "instant": false,
               "legendFormat": "p99",
               "range": true,
@@ -2344,7 +2344,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "description": "Time spent in decode phase per request (p10/p50/p99)",
           "fieldConfig": {
@@ -2412,10 +2412,10 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "PBFA97CFB590B2093"
               },
               "editorMode": "code",
-              "expr": "histogram_quantile(0.10, sum(rate(vllm:request_decode_time_seconds_bucket{pod=~\"${deployment}-.*\"}[10s])) by (le))",
+              "expr": "histogram_quantile(0.10, sum(rate(vllm:request_decode_time_seconds_bucket{pod=~\"${deployment}.*\"}[10s])) by (le))",
               "instant": false,
               "legendFormat": "p10",
               "range": true,
@@ -2424,10 +2424,10 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "PBFA97CFB590B2093"
               },
               "editorMode": "code",
-              "expr": "histogram_quantile(0.50, sum(rate(vllm:request_decode_time_seconds_bucket{pod=~\"${deployment}-.*\"}[10s])) by (le))",
+              "expr": "histogram_quantile(0.50, sum(rate(vllm:request_decode_time_seconds_bucket{pod=~\"${deployment}.*\"}[10s])) by (le))",
               "instant": false,
               "legendFormat": "p50",
               "range": true,
@@ -2436,10 +2436,10 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "PBFA97CFB590B2093"
               },
               "editorMode": "code",
-              "expr": "histogram_quantile(0.99, sum(rate(vllm:request_decode_time_seconds_bucket{pod=~\"${deployment}-.*\"}[10s])) by (le))",
+              "expr": "histogram_quantile(0.99, sum(rate(vllm:request_decode_time_seconds_bucket{pod=~\"${deployment}.*\"}[10s])) by (le))",
               "instant": false,
               "legendFormat": "p99",
               "range": true,
@@ -2452,7 +2452,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "description": "KV tokens computed during prefill (not served from cache). Compare with ISL to gauge prefix cache efficiency.",
           "fieldConfig": {
@@ -2520,10 +2520,10 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "PBFA97CFB590B2093"
               },
               "editorMode": "code",
-              "expr": "histogram_quantile(0.10, sum(rate(vllm:request_prefill_kv_computed_tokens_bucket{pod=~\"${deployment}-.*\"}[10s])) by (le))",
+              "expr": "histogram_quantile(0.10, sum(rate(vllm:request_prefill_kv_computed_tokens_bucket{pod=~\"${deployment}.*\"}[10s])) by (le))",
               "instant": false,
               "legendFormat": "p10",
               "range": true,
@@ -2532,10 +2532,10 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "PBFA97CFB590B2093"
               },
               "editorMode": "code",
-              "expr": "histogram_quantile(0.50, sum(rate(vllm:request_prefill_kv_computed_tokens_bucket{pod=~\"${deployment}-.*\"}[10s])) by (le))",
+              "expr": "histogram_quantile(0.50, sum(rate(vllm:request_prefill_kv_computed_tokens_bucket{pod=~\"${deployment}.*\"}[10s])) by (le))",
               "instant": false,
               "legendFormat": "p50",
               "range": true,
@@ -2544,10 +2544,10 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "PBFA97CFB590B2093"
               },
               "editorMode": "code",
-              "expr": "histogram_quantile(0.99, sum(rate(vllm:request_prefill_kv_computed_tokens_bucket{pod=~\"${deployment}-.*\"}[10s])) by (le))",
+              "expr": "histogram_quantile(0.99, sum(rate(vllm:request_prefill_kv_computed_tokens_bucket{pod=~\"${deployment}.*\"}[10s])) by (le))",
               "instant": false,
               "legendFormat": "p99",
               "range": true,
@@ -2601,7 +2601,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "description": "Time from engine core receiving request (queued_ts) to scheduler first processing it (scheduled_ts). Measured entirely within the engine \u2014 does NOT include API server delay.",
           "fieldConfig": {
@@ -2687,10 +2687,10 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "PBFA97CFB590B2093"
               },
               "editorMode": "code",
-              "expr": "histogram_quantile(0.10, sum(rate(vllm:request_queue_time_seconds_bucket{pod=~\"${deployment}-.*\"}[10s])) by (le))",
+              "expr": "histogram_quantile(0.10, sum(rate(vllm:request_queue_time_seconds_bucket{pod=~\"${deployment}.*\"}[10s])) by (le))",
               "instant": false,
               "legendFormat": "p10",
               "range": true,
@@ -2699,10 +2699,10 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "PBFA97CFB590B2093"
               },
               "editorMode": "code",
-              "expr": "histogram_quantile(0.50, sum(rate(vllm:request_queue_time_seconds_bucket{pod=~\"${deployment}-.*\"}[10s])) by (le))",
+              "expr": "histogram_quantile(0.50, sum(rate(vllm:request_queue_time_seconds_bucket{pod=~\"${deployment}.*\"}[10s])) by (le))",
               "instant": false,
               "legendFormat": "p50",
               "range": true,
@@ -2711,10 +2711,10 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "PBFA97CFB590B2093"
               },
               "editorMode": "code",
-              "expr": "histogram_quantile(0.95, sum(rate(vllm:request_queue_time_seconds_bucket{pod=~\"${deployment}-.*\"}[10s])) by (le))",
+              "expr": "histogram_quantile(0.95, sum(rate(vllm:request_queue_time_seconds_bucket{pod=~\"${deployment}.*\"}[10s])) by (le))",
               "instant": false,
               "legendFormat": "p95",
               "range": true,
@@ -2723,10 +2723,10 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "PBFA97CFB590B2093"
               },
               "editorMode": "code",
-              "expr": "histogram_quantile(0.99, sum(rate(vllm:request_queue_time_seconds_bucket{pod=~\"${deployment}-.*\"}[10s])) by (le))",
+              "expr": "histogram_quantile(0.99, sum(rate(vllm:request_queue_time_seconds_bucket{pod=~\"${deployment}.*\"}[10s])) by (le))",
               "instant": false,
               "legendFormat": "p99",
               "range": true,
@@ -2739,7 +2739,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "description": "Actual prefill/KV-fill compute time (first_token_ts - scheduled_ts). With DecodeBenchConnector this is the synthetic KV cache fill time, not a real prefill forward pass.",
           "fieldConfig": {
@@ -2825,10 +2825,10 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "PBFA97CFB590B2093"
               },
               "editorMode": "code",
-              "expr": "histogram_quantile(0.10, sum(rate(vllm:request_prefill_time_seconds_bucket{pod=~\"${deployment}-.*\"}[10s])) by (le))",
+              "expr": "histogram_quantile(0.10, sum(rate(vllm:request_prefill_time_seconds_bucket{pod=~\"${deployment}.*\"}[10s])) by (le))",
               "instant": false,
               "legendFormat": "p10",
               "range": true,
@@ -2837,10 +2837,10 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "PBFA97CFB590B2093"
               },
               "editorMode": "code",
-              "expr": "histogram_quantile(0.50, sum(rate(vllm:request_prefill_time_seconds_bucket{pod=~\"${deployment}-.*\"}[10s])) by (le))",
+              "expr": "histogram_quantile(0.50, sum(rate(vllm:request_prefill_time_seconds_bucket{pod=~\"${deployment}.*\"}[10s])) by (le))",
               "instant": false,
               "legendFormat": "p50",
               "range": true,
@@ -2849,10 +2849,10 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "PBFA97CFB590B2093"
               },
               "editorMode": "code",
-              "expr": "histogram_quantile(0.95, sum(rate(vllm:request_prefill_time_seconds_bucket{pod=~\"${deployment}-.*\"}[10s])) by (le))",
+              "expr": "histogram_quantile(0.95, sum(rate(vllm:request_prefill_time_seconds_bucket{pod=~\"${deployment}.*\"}[10s])) by (le))",
               "instant": false,
               "legendFormat": "p95",
               "range": true,
@@ -2861,10 +2861,10 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "PBFA97CFB590B2093"
               },
               "editorMode": "code",
-              "expr": "histogram_quantile(0.99, sum(rate(vllm:request_prefill_time_seconds_bucket{pod=~\"${deployment}-.*\"}[10s])) by (le))",
+              "expr": "histogram_quantile(0.99, sum(rate(vllm:request_prefill_time_seconds_bucket{pod=~\"${deployment}.*\"}[10s])) by (le))",
               "instant": false,
               "legendFormat": "p99",
               "range": true,
@@ -2877,7 +2877,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "description": "Derived: avg(TTFT) - avg(queue_time) - avg(prefill_time) per pod. Equals queued_ts - arrival_time: the time the request spends in the API server process (Renderer to engine forwarding). Dominated by asyncio contention when a single API server process is streaming tokens for hundreds of concurrent requests. Fix with --api-server-count.",
           "fieldConfig": {
@@ -2971,10 +2971,10 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "PBFA97CFB590B2093"
               },
               "editorMode": "code",
-              "expr": "(sum(rate(vllm:time_to_first_token_seconds_sum{pod=~\"${deployment}-.*\"}[10s])) by (pod) / sum(rate(vllm:time_to_first_token_seconds_count{pod=~\"${deployment}-.*\"}[10s])) by (pod)) - (sum(rate(vllm:request_queue_time_seconds_sum{pod=~\"${deployment}-.*\"}[10s])) by (pod) / sum(rate(vllm:request_queue_time_seconds_count{pod=~\"${deployment}-.*\"}[10s])) by (pod)) - (sum(rate(vllm:request_prefill_time_seconds_sum{pod=~\"${deployment}-.*\"}[10s])) by (pod) / sum(rate(vllm:request_prefill_time_seconds_count{pod=~\"${deployment}-.*\"}[10s])) by (pod))",
+              "expr": "(sum(rate(vllm:time_to_first_token_seconds_sum{pod=~\"${deployment}.*\"}[10s])) by (pod) / sum(rate(vllm:time_to_first_token_seconds_count{pod=~\"${deployment}.*\"}[10s])) by (pod)) - (sum(rate(vllm:request_queue_time_seconds_sum{pod=~\"${deployment}.*\"}[10s])) by (pod) / sum(rate(vllm:request_queue_time_seconds_count{pod=~\"${deployment}.*\"}[10s])) by (pod)) - (sum(rate(vllm:request_prefill_time_seconds_sum{pod=~\"${deployment}.*\"}[10s])) by (pod) / sum(rate(vllm:request_prefill_time_seconds_count{pod=~\"${deployment}.*\"}[10s])) by (pod))",
               "instant": false,
               "legendFormat": "{{pod}}-r{{rank}}",
               "range": true,
@@ -2987,7 +2987,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "description": "Total request latency from arrival_time (API server Renderer) to last token. Includes API server delay + engine queue + prefill + all decode steps.",
           "fieldConfig": {
@@ -3073,10 +3073,10 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "PBFA97CFB590B2093"
               },
               "editorMode": "code",
-              "expr": "histogram_quantile(0.10, sum(rate(vllm:e2e_request_latency_seconds_bucket{pod=~\"${deployment}-.*\"}[10s])) by (le))",
+              "expr": "histogram_quantile(0.10, sum(rate(vllm:e2e_request_latency_seconds_bucket{pod=~\"${deployment}.*\"}[10s])) by (le))",
               "instant": false,
               "legendFormat": "p10",
               "range": true,
@@ -3085,10 +3085,10 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "PBFA97CFB590B2093"
               },
               "editorMode": "code",
-              "expr": "histogram_quantile(0.50, sum(rate(vllm:e2e_request_latency_seconds_bucket{pod=~\"${deployment}-.*\"}[10s])) by (le))",
+              "expr": "histogram_quantile(0.50, sum(rate(vllm:e2e_request_latency_seconds_bucket{pod=~\"${deployment}.*\"}[10s])) by (le))",
               "instant": false,
               "legendFormat": "p50",
               "range": true,
@@ -3097,10 +3097,10 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "PBFA97CFB590B2093"
               },
               "editorMode": "code",
-              "expr": "histogram_quantile(0.95, sum(rate(vllm:e2e_request_latency_seconds_bucket{pod=~\"${deployment}-.*\"}[10s])) by (le))",
+              "expr": "histogram_quantile(0.95, sum(rate(vllm:e2e_request_latency_seconds_bucket{pod=~\"${deployment}.*\"}[10s])) by (le))",
               "instant": false,
               "legendFormat": "p95",
               "range": true,
@@ -3109,10 +3109,10 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
+                "uid": "PBFA97CFB590B2093"
               },
               "editorMode": "code",
-              "expr": "histogram_quantile(0.99, sum(rate(vllm:e2e_request_latency_seconds_bucket{pod=~\"${deployment}-.*\"}[10s])) by (le))",
+              "expr": "histogram_quantile(0.99, sum(rate(vllm:e2e_request_latency_seconds_bucket{pod=~\"${deployment}.*\"}[10s])) by (le))",
               "instant": false,
               "legendFormat": "p99",
               "range": true,
@@ -3142,7 +3142,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "PBFA97CFB590B2093"
       },
       "fieldConfig": {
         "defaults": {
@@ -3227,7 +3227,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
           "expr": "rate(nyann_eval_correct[5m]) / rate(nyann_eval_total[5m])",
@@ -3243,7 +3243,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "PBFA97CFB590B2093"
       },
       "fieldConfig": {
         "defaults": {
@@ -3356,7 +3356,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
           "expr": "sum by (workload) (rate(nyann_eval_correct[10s]))",
@@ -3368,7 +3368,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
           "expr": "sum by (workload) (rate(nyann_eval_incorrect[10s]))",
@@ -3384,7 +3384,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "PBFA97CFB590B2093"
       },
       "fieldConfig": {
         "defaults": {
@@ -3467,7 +3467,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
           "expr": "sum(rate(nyann_requests_total[10s]))",
@@ -3479,7 +3479,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
           "expr": "sum(rate(nyann_requests_total{status=\"error\"}[10s]))",
@@ -3495,7 +3495,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "PBFA97CFB590B2093"
       },
       "fieldConfig": {
         "defaults": {
@@ -3580,7 +3580,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
           "expr": "histogram_quantile(0.50, sum(rate(nyann_ttft_seconds_bucket[10s])) by (le))",
@@ -3592,7 +3592,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
           "expr": "histogram_quantile(0.95, sum(rate(nyann_ttft_seconds_bucket[10s])) by (le))",
@@ -3604,7 +3604,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
           "expr": "histogram_quantile(0.99, sum(rate(nyann_ttft_seconds_bucket[10s])) by (le))",
@@ -3620,7 +3620,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "PBFA97CFB590B2093"
       },
       "fieldConfig": {
         "defaults": {
@@ -3705,7 +3705,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
           "expr": "histogram_quantile(0.50, sum(rate(nyann_itl_seconds_bucket[10s])) by (le))",
@@ -3717,7 +3717,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
           "expr": "histogram_quantile(0.95, sum(rate(nyann_itl_seconds_bucket[10s])) by (le))",
@@ -3729,7 +3729,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
           "expr": "histogram_quantile(0.99, sum(rate(nyann_itl_seconds_bucket[10s])) by (le))",
@@ -3745,7 +3745,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "PBFA97CFB590B2093"
       },
       "fieldConfig": {
         "defaults": {
@@ -3827,7 +3827,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
           "expr": "sum(nyann_concurrency)",
@@ -3839,7 +3839,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
           "expr": "nyann_concurrency",
@@ -3868,7 +3868,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "PBFA97CFB590B2093"
       },
       "description": "RDMA transfer latency percentiles (time for nixl_xfer to complete)",
       "fieldConfig": {
@@ -3954,10 +3954,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.10, sum(rate(vllm:nixl_xfer_time_seconds_bucket{pod=~\"${deployment}-.*\"}[10s])) by (le))",
+          "expr": "histogram_quantile(0.10, sum(rate(vllm:nixl_xfer_time_seconds_bucket{pod=~\"${deployment}.*\"}[10s])) by (le))",
           "instant": false,
           "legendFormat": "p10",
           "range": true,
@@ -3966,10 +3966,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum(rate(vllm:nixl_xfer_time_seconds_bucket{pod=~\"${deployment}-.*\"}[10s])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(rate(vllm:nixl_xfer_time_seconds_bucket{pod=~\"${deployment}.*\"}[10s])) by (le))",
           "instant": false,
           "legendFormat": "p50",
           "range": true,
@@ -3978,10 +3978,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(vllm:nixl_xfer_time_seconds_bucket{pod=~\"${deployment}-.*\"}[10s])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(vllm:nixl_xfer_time_seconds_bucket{pod=~\"${deployment}.*\"}[10s])) by (le))",
           "instant": false,
           "legendFormat": "p95",
           "range": true,
@@ -3990,10 +3990,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(vllm:nixl_xfer_time_seconds_bucket{pod=~\"${deployment}-.*\"}[10s])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(vllm:nixl_xfer_time_seconds_bucket{pod=~\"${deployment}.*\"}[10s])) by (le))",
           "instant": false,
           "legendFormat": "p99",
           "range": true,
@@ -4006,7 +4006,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "PBFA97CFB590B2093"
       },
       "description": "Time to post/initiate a NIXL transfer",
       "fieldConfig": {
@@ -4092,10 +4092,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.10, sum(rate(vllm:nixl_post_time_seconds_bucket{pod=~\"${deployment}-.*\"}[10s])) by (le))",
+          "expr": "histogram_quantile(0.10, sum(rate(vllm:nixl_post_time_seconds_bucket{pod=~\"${deployment}.*\"}[10s])) by (le))",
           "instant": false,
           "legendFormat": "p10",
           "range": true,
@@ -4104,10 +4104,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum(rate(vllm:nixl_post_time_seconds_bucket{pod=~\"${deployment}-.*\"}[10s])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(rate(vllm:nixl_post_time_seconds_bucket{pod=~\"${deployment}.*\"}[10s])) by (le))",
           "instant": false,
           "legendFormat": "p50",
           "range": true,
@@ -4116,10 +4116,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(vllm:nixl_post_time_seconds_bucket{pod=~\"${deployment}-.*\"}[10s])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(vllm:nixl_post_time_seconds_bucket{pod=~\"${deployment}.*\"}[10s])) by (le))",
           "instant": false,
           "legendFormat": "p95",
           "range": true,
@@ -4128,10 +4128,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(vllm:nixl_post_time_seconds_bucket{pod=~\"${deployment}-.*\"}[10s])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(vllm:nixl_post_time_seconds_bucket{pod=~\"${deployment}.*\"}[10s])) by (le))",
           "instant": false,
           "legendFormat": "p99",
           "range": true,
@@ -4144,7 +4144,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "PBFA97CFB590B2093"
       },
       "description": "KV cache transfer throughput in bytes per second and transfers per second",
       "fieldConfig": {
@@ -4247,10 +4247,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "sum(rate(vllm:nixl_bytes_transferred_sum{pod=~\"${deployment}-.*\"}[10s]))",
+          "expr": "sum(rate(vllm:nixl_bytes_transferred_sum{pod=~\"${deployment}.*\"}[10s]))",
           "instant": false,
           "legendFormat": "Bytes/s",
           "range": true,
@@ -4259,10 +4259,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "sum(rate(vllm:nixl_bytes_transferred_count{pod=~\"${deployment}-.*\"}[10s]))",
+          "expr": "sum(rate(vllm:nixl_bytes_transferred_count{pod=~\"${deployment}.*\"}[10s]))",
           "instant": false,
           "legendFormat": "Transfers/s",
           "range": true,
@@ -4275,7 +4275,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "PBFA97CFB590B2093"
       },
       "description": "NIXL error rates: failed transfers, failed notifications, and expired KV requests",
       "fieldConfig": {
@@ -4407,10 +4407,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "sum(rate(vllm:nixl_num_failed_transfers_total{pod=~\"${deployment}-.*\"}[10s]))",
+          "expr": "sum(rate(vllm:nixl_num_failed_transfers_total{pod=~\"${deployment}.*\"}[10s]))",
           "instant": false,
           "legendFormat": "Failed Transfers",
           "range": true,
@@ -4419,10 +4419,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "sum(rate(vllm:nixl_num_failed_notifications_total{pod=~\"${deployment}-.*\"}[10s]))",
+          "expr": "sum(rate(vllm:nixl_num_failed_notifications_total{pod=~\"${deployment}.*\"}[10s]))",
           "instant": false,
           "legendFormat": "Failed Notifications",
           "range": true,
@@ -4431,10 +4431,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "sum(rate(vllm:nixl_num_kv_expired_reqs_total{pod=~\"${deployment}-.*\"}[10s]))",
+          "expr": "sum(rate(vllm:nixl_num_kv_expired_reqs_total{pod=~\"${deployment}.*\"}[10s]))",
           "instant": false,
           "legendFormat": "Expired KV Reqs",
           "range": true,
@@ -4460,7 +4460,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "PBFA97CFB590B2093"
       },
       "description": "Number of ready pods seen by the EPP",
       "fieldConfig": {
@@ -4517,7 +4517,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
           "expr": "inference_pool_ready_pods{name=~\".*\"}",
@@ -4529,7 +4529,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "PBFA97CFB590B2093"
       },
       "description": "Fraction of scheduling attempts that succeed (vs InferencePoolResourceExhausted)",
       "fieldConfig": {
@@ -4588,10 +4588,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "rate(inference_extension_scheduler_attempts_total{status=\"success\", pod=~\"${deployment}-.*\"}[10s]) / (rate(inference_extension_scheduler_attempts_total{status=\"success\", pod=~\"${deployment}-.*\"}[10s]) + rate(inference_extension_scheduler_attempts_total{status=\"failure\", pod=~\"${deployment}-.*\"}[10s]))",
+          "expr": "rate(inference_extension_scheduler_attempts_total{status=\"success\", pod=~\"${deployment}.*\"}[10s]) / (rate(inference_extension_scheduler_attempts_total{status=\"success\", pod=~\"${deployment}.*\"}[10s]) + rate(inference_extension_scheduler_attempts_total{status=\"failure\", pod=~\"${deployment}.*\"}[10s]))",
           "legendFormat": "Success Rate",
           "refId": "A"
         }
@@ -4600,7 +4600,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "PBFA97CFB590B2093"
       },
       "description": "Total in-flight requests tracked by EPP",
       "fieldConfig": {
@@ -4657,10 +4657,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "inference_objective_running_requests{model_name=\"nvidia/DeepSeek-R1-0528-NVFP4-v2\", pod=~\"${deployment}-.*\"}",
+          "expr": "inference_objective_running_requests{pod=~\"${deployment}.*\"}",
           "legendFormat": "Running",
           "refId": "A"
         }
@@ -4669,7 +4669,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "PBFA97CFB590B2093"
       },
       "description": "Average KV cache utilization as seen by the EPP across all pool endpoints",
       "fieldConfig": {
@@ -4730,7 +4730,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
           "expr": "inference_pool_average_kv_cache_utilization{name=~\".*\"}",
@@ -4742,7 +4742,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "PBFA97CFB590B2093"
       },
       "description": "Average queue size across all endpoints as seen by EPP",
       "fieldConfig": {
@@ -4799,7 +4799,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
           "expr": "inference_pool_average_queue_size{name=~\".*\"}",
@@ -4811,7 +4811,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "PBFA97CFB590B2093"
       },
       "description": "Rate of prefill-decode disaggregation decisions per second",
       "fieldConfig": {
@@ -4862,10 +4862,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "sum(rate(llm_d_inference_scheduler_pd_decision_total{pod=~\"${deployment}-.*\"}[10s]))",
+          "expr": "sum(rate(llm_d_inference_scheduler_pd_decision_total{pod=~\"${deployment}.*\"}[10s]))",
           "legendFormat": "P/D decisions/s",
           "refId": "A"
         }
@@ -4874,7 +4874,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "PBFA97CFB590B2093"
       },
       "description": "Queue depth per endpoint as seen by EPP. Large imbalances indicate the scorer/picker is not distributing load evenly.",
       "fieldConfig": {
@@ -4959,7 +4959,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
           "expr": "inference_pool_per_pod_queue_size{name=~\".*\"}",
@@ -4972,7 +4972,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "PBFA97CFB590B2093"
       },
       "description": "Rate of scheduling attempts (success vs failure). Failures are typically InferencePoolResourceExhausted (all endpoints at capacity).",
       "fieldConfig": {
@@ -5086,10 +5086,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "rate(inference_extension_scheduler_attempts_total{status=\"success\", pod=~\"${deployment}-.*\"}[10s])",
+          "expr": "rate(inference_extension_scheduler_attempts_total{status=\"success\", pod=~\"${deployment}.*\"}[10s])",
           "legendFormat": "success",
           "range": true,
           "refId": "A"
@@ -5097,10 +5097,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "rate(inference_extension_scheduler_attempts_total{status=\"failure\", pod=~\"${deployment}-.*\"}[10s])",
+          "expr": "rate(inference_extension_scheduler_attempts_total{status=\"failure\", pod=~\"${deployment}.*\"}[10s])",
           "legendFormat": "failure",
           "range": true,
           "refId": "B"
@@ -5110,7 +5110,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "PBFA97CFB590B2093"
       },
       "description": "End-to-end scheduling latency (time from request arrival to endpoint selection)",
       "fieldConfig": {
@@ -5193,10 +5193,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, rate(inference_extension_scheduler_e2e_duration_seconds_bucket{pod=~\"${deployment}-.*\"}[10s]))",
+          "expr": "histogram_quantile(0.50, rate(inference_extension_scheduler_e2e_duration_seconds_bucket{pod=~\"${deployment}.*\"}[10s]))",
           "legendFormat": "p50",
           "range": true,
           "refId": "A"
@@ -5204,10 +5204,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, rate(inference_extension_scheduler_e2e_duration_seconds_bucket{pod=~\"${deployment}-.*\"}[10s]))",
+          "expr": "histogram_quantile(0.99, rate(inference_extension_scheduler_e2e_duration_seconds_bucket{pod=~\"${deployment}.*\"}[10s]))",
           "legendFormat": "p99",
           "range": true,
           "refId": "B"
@@ -5217,7 +5217,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "PBFA97CFB590B2093"
       },
       "description": "p99 latency of each EPP plugin (scorer, filter, picker, handler). High active-request-scorer latency may indicate the EPP is blocking on vLLM metrics scraping.",
       "fieldConfig": {
@@ -5302,10 +5302,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum by (le, plugin_name) (rate(inference_extension_plugin_duration_seconds_bucket{pod=~\"${deployment}-.*\"}[10s])))",
+          "expr": "histogram_quantile(0.99, sum by (le, plugin_name) (rate(inference_extension_plugin_duration_seconds_bucket{pod=~\"${deployment}.*\"}[10s])))",
           "legendFormat": "{{plugin_name}}",
           "range": true,
           "refId": "A"
@@ -5315,7 +5315,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "PBFA97CFB590B2093"
       },
       "description": "Rate of request errors by error code. InferencePoolResourceExhausted means all endpoints were at capacity.",
       "fieldConfig": {
@@ -5398,10 +5398,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "rate(inference_objective_request_error_total{pod=~\"${deployment}-.*\"}[10s])",
+          "expr": "rate(inference_objective_request_error_total{pod=~\"${deployment}.*\"}[10s])",
           "legendFormat": "{{error_code}}",
           "range": true,
           "refId": "A"
@@ -5424,7 +5424,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "PBFA97CFB590B2093"
       },
       "description": "NVLink / MNNVL transmit and receive bandwidth per node (from DCGM profiling counters)",
       "fieldConfig": {
@@ -5510,7 +5510,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
           "expr": "rate(DCGM_FI_PROF_NVLINK_TX_BYTES{job=\"dcgm\"}[1m]) * on(node) group_left(role) (max by(node, role) (label_replace(up{job=~\"vllm-.*\"}, \"role\", \"$1\", \"job\", \"vllm-(.*)\")))",
@@ -5522,7 +5522,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
           "expr": "rate(DCGM_FI_PROF_NVLINK_RX_BYTES{job=\"dcgm\"}[1m]) * on(node) group_left(role) (max by(node, role) (label_replace(up{job=~\"vllm-.*\"}, \"role\", \"$1\", \"job\", \"vllm-(.*)\")))",
@@ -5538,7 +5538,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "PBFA97CFB590B2093"
       },
       "description": "InfiniBand port transmit and receive byte rates per node and device",
       "fieldConfig": {
@@ -5624,10 +5624,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "rate(node_infiniband_port_data_transmitted_bytes_total{pod=~\"${deployment}-.*\"}[1m])",
+          "expr": "rate(node_infiniband_port_data_transmitted_bytes_total{pod=~\"${deployment}.*\"}[1m])",
           "instant": false,
           "legendFormat": "TX {{node}} {{device}}:{{port}}",
           "range": true,
@@ -5636,10 +5636,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "rate(node_infiniband_port_data_received_bytes_total{pod=~\"${deployment}-.*\"}[1m])",
+          "expr": "rate(node_infiniband_port_data_received_bytes_total{pod=~\"${deployment}.*\"}[1m])",
           "instant": false,
           "legendFormat": "RX {{node}} {{device}}:{{port}}",
           "range": true,
@@ -5652,7 +5652,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "PBFA97CFB590B2093"
       },
       "description": "GPU compute utilization percentage per node (from DCGM)",
       "fieldConfig": {
@@ -5738,7 +5738,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
           "expr": "DCGM_FI_DEV_GPU_UTIL{job=\"dcgm\"} * on(node) group_left(role) (max by(node, role) (label_replace(up{job=~\"vllm-.*\"}, \"role\", \"$1\", \"job\", \"vllm-(.*)\")))",
@@ -5754,7 +5754,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "PBFA97CFB590B2093"
       },
       "description": "GPU power consumption in watts per node (from DCGM)",
       "fieldConfig": {
@@ -5840,7 +5840,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
           "expr": "DCGM_FI_DEV_POWER_USAGE{job=\"dcgm\"} * on(node) group_left(role) (max by(node, role) (label_replace(up{job=~\"vllm-.*\"}, \"role\", \"$1\", \"job\", \"vllm-(.*)\")))",
@@ -6094,7 +6094,7 @@
         },
         "datasource": {
           "type": "prometheus",
-          "uid": "${DS_PROMETHEUS}"
+          "uid": "PBFA97CFB590B2093"
         },
         "definition": "label_values(vllm:num_requests_running, pod)",
         "includeAll": true,
@@ -6119,7 +6119,7 @@
   },
   "timepicker": {},
   "timezone": "",
-  "title": "WideEP Overview",
+  "title": "GLM-5.2 AgentX P/D",
   "uid": "wideep-overview",
   "version": 6,
   "__inputs": [
