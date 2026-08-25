@@ -14,7 +14,7 @@ roles:
       kv_load_failure_policy: fail
       kv_connector_extra_config:
         connectors:
-          - {kv_connector: NixlConnector, kv_role: kv_producer, kv_connector_extra_config: {enforce_handshake_compat: false}}
+          - {kv_connector: NixlConnector, kv_role: kv_both, kv_connector_extra_config: {enforce_handshake_compat: false}}   # kv_both as in the reference runs
           - kv_connector: OffloadingConnector
             kv_role: kv_both
             kv_connector_extra_config: {spec_name: TieringOffloadingSpec, cpu_bytes_to_use: 107374182400, eviction_policy: lru}
