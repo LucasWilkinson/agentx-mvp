@@ -1,5 +1,5 @@
 # 1 prefill pod TP8 + EP + 1 decode pod TP8 + EP (TEP8, no data parallelism). 16 GPUs.
-extends: base.yaml
+extends: base-offload.yaml
 release: glm52-p1-tp8ep-d1-tp8ep
 roles:
   prefill:

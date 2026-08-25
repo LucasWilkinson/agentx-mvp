@@ -1,7 +1,7 @@
 # Reference layout ("142k + Baseline" p1w1_d1w1): 1 prefill pod DP8 + EP (DeepEP high-throughput,
 # 2048-token chunks) + 1 decode pod DP8 + EP (DeepEP low-latency). 16 GPUs.
 # Prefill DP needs the llm-d sidecar to fan out over ports 8000-8007 (routing_proxy + external LB).
-extends: base.yaml
+extends: base-offload.yaml
 release: glm52-p1-dp8ep-d1-dp8ep
 roles:
   prefill:

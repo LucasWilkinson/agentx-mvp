@@ -33,29 +33,11 @@ vars:
 roles:
   - name: prefill
     parallelism: {tp: 8, dp: 1, ep: false}
-    # KV offloading to CPU as in the reference "+ Offloading" runs: the OffloadingConnector's region is an mmap
-    # under /dev/shm sized cpu_bytes_to_use (100 GiB), so /dev/shm and the pod memory limit must be large;
-    # a 128Gi shm made madvise(POPULATE_WRITE) fail with "Bad address" (2026-08-25).
-    resources: {memory: 1500Gi}
-    shm_size: 1500Gi
-    kv_transfer_config:
-      kv_connector: MultiConnector
-      kv_role: kv_both
-      kv_load_failure_policy: fail
-      kv_connector_extra_config:
-        connectors:
-          # kv_producer (not kv_both as in the reference): NixlConnector under PCP only supports the producer role.
-          - {kv_connector: NixlConnector, kv_role: kv_producer, kv_connector_extra_config: {enforce_handshake_compat: false}}
-          - kv_connector: OffloadingConnector
-            kv_role: kv_both
-            kv_connector_extra_config: {spec_name: TieringOffloadingSpec, cpu_bytes_to_use: 107374182400, eviction_policy: lru}
+    kv_transfer_config: {kv_connector: NixlConnector, kv_role: kv_producer, kv_connector_extra_config: {enforce_handshake_compat: false}}
     vllm:
       <<: *common_vllm
       max_num_batched_tokens: 8192
-      gpu_memory_utilization: "0.90"
-    # No CUDA graphs on prefill while offloading is on: the OffloadingConnector's copy stream breaks graph
-    # capture ("capturing stream has unjoined work", DP8 prefill, 2026-08-25). Prefill is compute-bound anyway.
-    vllm_raw_args: [-cc.cudagraph_mode=NONE]
+      gpu_memory_utilization: "0.90"   # headroom for 8k-token graph capture; still ~5x 131k-token concurrency
   - name: decode
     parallelism: {tp: 1, dp: 8, ep: true}
     routing_proxy: true

@@ -1,0 +1,23 @@
+# base.yaml + prefill KV offloading to CPU (as in the reference "+ Offloading" runs). Not for PCP variants:
+# NixlConnector under PCP is producer-only and MultiConnector+OffloadingConnector hung the PCP prefill engine
+# (0 running / N waiting / KV 80% forever, 2026-08-25).
+extends: base.yaml
+roles:
+  prefill:
+    # The OffloadingConnector's region is an mmap under /dev/shm sized cpu_bytes_to_use (100 GiB), so /dev/shm
+    # and the pod memory limit must be large; a 128Gi shm made madvise(POPULATE_WRITE) fail with "Bad address".
+    resources: {memory: 1500Gi}
+    shm_size: 1500Gi
+    kv_transfer_config:
+      kv_connector: MultiConnector
+      kv_role: kv_both
+      kv_load_failure_policy: fail
+      kv_connector_extra_config:
+        connectors:
+          - {kv_connector: NixlConnector, kv_role: kv_producer, kv_connector_extra_config: {enforce_handshake_compat: false}}
+          - kv_connector: OffloadingConnector
+            kv_role: kv_both
+            kv_connector_extra_config: {spec_name: TieringOffloadingSpec, cpu_bytes_to_use: 107374182400, eviction_policy: lru}
+    # No CUDA graphs on prefill while offloading is on: the OffloadingConnector's copy stream breaks graph
+    # capture ("capturing stream has unjoined work", DP8 prefill, 2026-08-25). Prefill is compute-bound anyway.
+    vllm_raw_args: [-cc.cudagraph_mode=NONE]

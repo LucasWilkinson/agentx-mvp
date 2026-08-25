@@ -7,9 +7,6 @@ release: glm52-p1-pcp8ep-d1-dp8ep
 roles:
   prefill:
     parallelism: {tp: 8, dp: 1, ep: true}
-    # No KV offloading under PCP: with the MultiConnector(NIXL + OffloadingConnector) the prefill engine hung
-    # (0 running / N waiting / KV 80% forever, 2026-08-25). NIXL under PCP is producer-only anyway.
-    kv_transfer_config: {kv_connector: NixlConnector, kv_role: kv_producer, kv_connector_extra_config: {enforce_handshake_compat: false}}
     # PCP counts as a DP-like EP layout in vLLM (use_all2all_kernels: ep and (dp>1 or pcp>1)), so DeepEP
     # high-throughput dispatch applies here (it does not for TP8+EP prefill, which is dp=1/pcp=1).
     env:
