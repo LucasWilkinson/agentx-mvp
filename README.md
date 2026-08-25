@@ -153,3 +153,16 @@ instead of fighting for GPUs. Caveat: Kueue only accounts *its own* workloads â€
 other namespaces are invisible to it, so quota is a policy, not a measurement. While a deploy sits in the
 queue `just deploy` keeps waiting for readiness (`MODEL_READY_TIMEOUT`, default 30m). `just kueue status`
 lists queues and pending workloads; `just kueue uninstall` removes everything.
+
+## Per-role vLLM builds (branches)
+
+`VLLM_ENV` in `.env` is the default build for every role (rendered as `--dev-venv $VLLM_ENV/.venv`). A spec can
+pin a different `ve` env for one role by setting that role's `env.MANIFESTO_VLLM_DEV_VENV` â€” the launch script
+activates whatever venv that variable names, and role `env` is layered after the global default. Build a new env
+on the devbox with `VE_CACHE_DIR=/workspace/.cache/vllm-envs VE_ENVS_ROOT=/workspace/vdptest ve new <remote>/<branch> --name <name> --repo /workspace/vdptest/vllm-main`
+(the worktree must live on the workspace PVC so GPU pods can mount it).
+
+Branch-specific args belong in the same variant spec (see `manifesto/models/glm-5.2/p1-pcp8ep-d1-dp8ep-glm53.yaml`):
+`extends` deep-merges mappings but *replaces* lists, so restate `vllm_raw_args` to drop a parent flag, and use
+`key: $delete` to remove a mapping entry. `vllm_env.txt` in each sweep config dir records env, commit and branch
+per role.

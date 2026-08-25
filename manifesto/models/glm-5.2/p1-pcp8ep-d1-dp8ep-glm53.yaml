@@ -1,0 +1,14 @@
+# PCP8+EP prefill running the nm `glm-53-blog/prefiller` build (vllm-project/vllm#53515 + sparse-MLA
+# piecewise cudagraphs) while decode stays on the default VLLM_ENV build.
+# Branch-specific args live here: main needs -cc.cudagraph_mode=NONE for sparse-MLA PCP; this branch does not,
+# so the raw args are restated without it (list overrides replace the parent's list).
+extends: p1-pcp8ep-d1-dp8ep.yaml
+release: glm52-p1-pcp8ep-d1-dp8ep-glm53
+roles:
+  prefill:
+    env:
+      MANIFESTO_VLLM_DEV_VENV: /workspace/vdptest/glm53-prefiller/.venv   # `ve` env built from nm/glm-53-blog/prefiller
+    vllm_raw_args:
+      - --tensor-parallel-size 1
+      - --prefill-context-parallel-size 8
+      - -cc.cudagraph_mode=PIECEWISE   # what the branch supports for sparse-MLA PCP (FULL is still rejected)

@@ -76,5 +76,5 @@ grafana-export:
 test:
     bash -n scripts/*.sh
     python3 -m json.tool dashboards/grafana-wideep-overview.json >/dev/null
-    python3 -m py_compile scripts/build-dashboard.py scripts/filter-render.py scripts/vllm-args.py scripts/kv-cache-info.py scripts/run-context.py export_dashboard.py gen_interactivity_chart.py
+    python3 -m py_compile scripts/build-dashboard.py scripts/filter-render.py scripts/vllm-args.py scripts/kv-cache-info.py scripts/run-context.py; bash -n scripts/vllm-build-info.sh export_dashboard.py gen_interactivity_chart.py
     scripts/validate-specs.sh
