@@ -1,0 +1,7 @@
+# Namespace-side handle; scripts/kueue.sh applies it into $NAMESPACE.
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  name: agentx
+spec:
+  clusterQueue: agentx

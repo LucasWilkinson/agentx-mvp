@@ -13,6 +13,7 @@ import yaml
 signal.signal(signal.SIGPIPE, signal.SIG_DFL)  # quiet exit when a downstream `head`/`grep -m1` closes the pipe
 
 VLLM_IMAGE = os.environ.get("VLLM_IMAGE", "")  # optional override of the model-server image
+KUEUE_QUEUE = os.environ.get("KUEUE_QUEUE", "")  # optional Kueue LocalQueue; admission gates the model pods
 
 KEEP_KINDS = {"Deployment", "LeaderWorkerSet", "Service", "ConfigMap", "ServiceAccount"}
 DROP_NAME_PARTS = ("-infpool", "-gateway", "-epp")
@@ -54,6 +55,10 @@ for d in kept:
     })
     if ports:
         tmpl.setdefault("metadata", {}).setdefault("annotations", {})[ACTIVE_PORTS_ANNOTATION] = ",".join(map(str, ports))
+if KUEUE_QUEUE:
+    for d in kept:
+        if d["kind"] in ("Deployment", "LeaderWorkerSet"):
+            d["metadata"].setdefault("labels", {})["kueue.x-k8s.io/queue-name"] = KUEUE_QUEUE
 if not kept:
     raise SystemExit("filter-render: no model-server objects in input")
 print("# Rendered by llm-manifesto; routing objects stripped (router is Helm-managed, see deploy/router-values.yaml).")

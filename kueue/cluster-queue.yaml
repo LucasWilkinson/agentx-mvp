@@ -1,0 +1,24 @@
+# One FIFO queue for AgentX sweeps. Kueue only accounts workloads that carry a queue-name label:
+# GPUs held by non-Kueue pods (other namespaces' bare pods) are invisible to it, so the quota is
+# what this queue may hand out, not what the cluster physically has (4 nodes x 8 = 32 H200).
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ClusterQueue
+metadata:
+  name: agentx
+spec:
+  namespaceSelector: {}
+  queueingStrategy: StrictFIFO
+  preemption:
+    withinClusterQueue: Never
+    reclaimWithinCohort: Never
+  resourceGroups:
+    - coveredResources: ["cpu", "memory", "nvidia.com/gpu"]
+      flavors:
+        - name: h200
+          resources:
+            - name: nvidia.com/gpu
+              nominalQuota: 32
+            - name: cpu
+              nominalQuota: 512
+            - name: memory
+              nominalQuota: 8Ti

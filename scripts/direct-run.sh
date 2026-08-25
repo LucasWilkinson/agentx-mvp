@@ -16,6 +16,7 @@ CPU_LIMIT="${CPU_LIMIT:-16}"
 MEMORY_REQUEST="${MEMORY_REQUEST:-32Gi}"
 MEMORY_LIMIT="${MEMORY_LIMIT:-64Gi}"
 HF_TOKEN_SECRET="${HF_TOKEN_SECRET:-}"
+KUEUE_QUEUE="${KUEUE_QUEUE:-}"   # when set, the Job is created suspended and Kueue admits it
 
 for value in "$CONCURRENCY" "$DURATION_SECONDS" "$MAX_CONTEXT_LENGTH" "$RANDOM_SEED"; do
   [[ "$value" =~ ^[1-9][0-9]*$ ]] || {
@@ -65,6 +66,10 @@ EOF
 )
 fi
 
+kueue_label=""; suspend=false
+if [[ -n "$KUEUE_QUEUE" ]]; then
+  kueue_label="    kueue.x-k8s.io/queue-name: ${KUEUE_QUEUE}"; suspend=true   # Kueue admits (unsuspends) the Job
+fi
 cat >"$manifest" <<EOF
 apiVersion: batch/v1
 kind: Job
@@ -73,7 +78,9 @@ metadata:
   namespace: ${NAMESPACE}
   labels:
     app.kubernetes.io/name: agentx-aiperf
+${kueue_label}
 spec:
+  suspend: ${suspend}
   backoffLimit: 0
   activeDeadlineSeconds: $((DURATION_SECONDS + 7200))
   template:

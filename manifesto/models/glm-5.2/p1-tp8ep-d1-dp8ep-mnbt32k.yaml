@@ -1,0 +1,8 @@
+# TP8+EP prefill with large chunks (32768): activations are TP-sharded so this fits where DP8 cannot.
+# Isolates chunk size from layout for the TP8 prefill results.
+extends: p1-tp8ep-d1-dp8ep.yaml
+release: glm52-p1-tp8ep-d1-dp8ep-mnbt32k
+roles:
+  prefill:
+    vllm:
+      max_num_batched_tokens: 32768

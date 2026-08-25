@@ -137,3 +137,19 @@ embeds the matching Grafana time range into `dashboard.html` beside each run.
 | `just dashboard <sweep>` | Build a shareable HTML comparison of a sweep |
 | `just grafana-export` | Export each run's Grafana dashboard to HTML |
 | `just test` | Validate scripts and dashboard JSON |
+
+## Kueue (optional queueing)
+
+`just kueue install` installs the Kueue controller cluster-wide (`kueue-system`, chart
+`registry.k8s.io/kueue` `KUEUE_CHART_VERSION`, values in `kueue/values.yaml`), the `h200`
+ResourceFlavor, the `agentx` ClusterQueue (StrictFIFO, 32 H200 quota — edit `kueue/cluster-queue.yaml`),
+and the `agentx` LocalQueue in `$NAMESPACE`. Only workloads carrying `kueue.x-k8s.io/queue-name` are
+managed, so other namespaces are unaffected unless they opt in.
+
+Set `KUEUE_QUEUE=agentx` in `.env` and every render (`just deploy`/`just sweep`) labels the model-server
+Deployments/LeaderWorkerSets, and every aiperf Job is created `suspend: true` with the label; Kueue admits
+them in FIFO order when the queue's quota covers them. Two sweeps started at once therefore run back to back
+instead of fighting for GPUs. Caveat: Kueue only accounts *its own* workloads — GPUs held by bare pods in
+other namespaces are invisible to it, so quota is a policy, not a measurement. While a deploy sits in the
+queue `just deploy` keeps waiting for readiness (`MODEL_READY_TIMEOUT`, default 30m). `just kueue status`
+lists queues and pending workloads; `just kueue uninstall` removes everything.

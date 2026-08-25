@@ -1,0 +1,8 @@
+# Piggy cluster GPU nodes: 4 x gd-8xh200ib-i128 (8 x H200, 3.2T IB). Labels from `kubectl get node <n> --show-labels`.
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ResourceFlavor
+metadata:
+  name: h200
+spec:
+  nodeLabels:
+    nvidia.com/gpu.product: NVIDIA-H200

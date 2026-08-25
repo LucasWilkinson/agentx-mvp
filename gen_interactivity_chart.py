@@ -220,6 +220,52 @@ def read_kv_cache_tokens(run_dir):
     return read_kv_cache_tokens_from_cache_config(run_dir)
 
 
+# --- Fallback when AIPerf server metrics were not captured: per-config kv-cache.yaml (scripts/kv-cache-info.sh)
+# or the saved pod logs, scaled by the role's data-parallel size from vllm-args.yaml. Values are totals
+# across ranks, like the vllm:cache_config_info sum above.
+KV_LOG_RE = re.compile(r'GPU KV cache size: ([\d,]+) tokens')
+KV_YAML_RE = re.compile(r'^(prefill|decode)\S*:\s*$|^\s+kv_cache_tokens:\s*(\d+)\s*$', re.M)
+DP_YAML_RE = re.compile(r'^(prefill|decode)\S*:\s*$|^\s+data-parallel-size:\s*(\d+)\s*$', re.M)
+
+
+def _per_role_from_yaml(path, pattern):
+    out = {}
+    if not os.path.isfile(path):
+        return out
+    role = None
+    with open(path) as f:
+        for m in pattern.finditer(f.read()):
+            if m.group(1):
+                role = m.group(1)
+            elif role and m.group(2):
+                out.setdefault(role, int(m.group(2)))
+    return out
+
+
+def read_kv_cache_tokens_from_config_dir(config_dir):
+    per_rank = _per_role_from_yaml(os.path.join(config_dir, 'kv-cache.yaml'), KV_YAML_RE)
+    if not per_rank:
+        logs_dir = os.path.join(config_dir, 'logs')
+        if os.path.isdir(logs_dir):
+            for name in sorted(os.listdir(logs_dir)):
+                role = 'prefill' if 'prefill' in name else 'decode' if 'decode' in name else None
+                if role is None or role in per_rank:
+                    continue
+                try:
+                    with open(os.path.join(logs_dir, name), errors='replace') as f:
+                        for line in f:
+                            m = KV_LOG_RE.search(line)
+                            if m:
+                                per_rank[role] = int(m.group(1).replace(',', ''))
+                                break
+                except OSError:
+                    continue
+    if not per_rank:
+        return None
+    dp = _per_role_from_yaml(os.path.join(config_dir, 'vllm-args.yaml'), DP_YAML_RE)
+    return {role: per_rank.get(role, 0) * dp.get(role, 1) or None for role in ('prefill', 'decode')}
+
+
 def discover_configs(results_dir):
     """Auto-discover deployment configs and concurrency levels from folder structure.
 
@@ -246,6 +292,7 @@ def discover_configs(results_dir):
         default_pods = read_text_file(os.path.join(config_dir, 'pods.txt'), config_name)
 
         conc_pattern = re.compile(rf'^results_{re.escape(config_name)}_c(\d+)$')
+        config_kv_cache_tokens = read_kv_cache_tokens_from_config_dir(config_dir)
         runs = {}
         for sub in sorted(os.listdir(config_dir)):
             cm = conc_pattern.match(sub)
@@ -265,7 +312,7 @@ def discover_configs(results_dir):
                     if key not in metric_units:
                         metric_units[key] = val.get('unit', '')
 
-            kv_cache_tokens = read_kv_cache_tokens(os.path.join(config_dir, sub))
+            kv_cache_tokens = read_kv_cache_tokens(os.path.join(config_dir, sub)) or config_kv_cache_tokens
             if kv_cache_tokens is not None:
                 run_data['_kv_cache_tokens'] = kv_cache_tokens
 
