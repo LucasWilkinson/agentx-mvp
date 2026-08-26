@@ -16,9 +16,6 @@ storage:
   shared_mount_path: /workspace
 paths:
   user_root: /workspace/{user}
-model_server_resources:
-  cpu_per_gpu: "4"
-  memory_per_gpu: 64Gi
 rdma:
   resource_name: rdma/ib
   value: "8"
@@ -29,9 +26,6 @@ pod_defaults:
     - {name: hf, persistentVolumeClaim: {claimName: hf-cache}}
   extra_volume_mounts:
     - {name: hf, mountPath: /models}
-dev:
-  venv: /workspace/vdptest/vllm-main/.venv
-  source: /workspace/vdptest/vllm-main
 fabric:
   ucx_net_devices: ""
   profiles:

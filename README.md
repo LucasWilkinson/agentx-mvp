@@ -17,7 +17,7 @@ GLM-5.2 variants without embedding cluster-specific values.
 
 ## Deploy the model
 
-Model servers are rendered by [llm-manifesto](https://github.com/tlrmchlsmth/llm-manifesto)
+Model servers are rendered by [llm-manifesto](https://github.com/neuralmagic/llm-manifesto)
 from the catalog in `manifesto/` (`clusters/coreweave-h200.yaml`, `models/glm-5.2/*.yaml`).
 Clone it next to this repo (`MANIFESTO_ROOT`, default `../llm-manifesto`).
 
@@ -156,9 +156,9 @@ lists queues and pending workloads; `just kueue uninstall` removes everything.
 
 ## Per-role vLLM builds (branches)
 
-`VLLM_ENV` in `.env` is the default build for every role (rendered as `--dev-venv $VLLM_ENV/.venv`). A spec can
-pin a different `ve` env for one role by setting that role's `env.MANIFESTO_VLLM_DEV_VENV` — the launch script
-activates whatever venv that variable names, and role `env` is layered after the global default. Build a new env
+`VLLM_ENV` in `.env` is the default build for every role (rendered as `--vllm-env $VLLM_ENV`, a `ve` worktree with
+its `.venv`). A spec can pin a different `ve` env for one role by setting that role's `env.MANIFESTO_VLLM_ENV` — the
+launch script activates `$MANIFESTO_VLLM_ENV/.venv`, and role `env` is layered after the global default. Build a new env
 on the devbox with `VE_CACHE_DIR=/workspace/.cache/vllm-envs VE_ENVS_ROOT=/workspace/vdptest ve new <remote>/<branch> --name <name> --repo /workspace/vdptest/vllm-main`
 (the worktree must live on the workspace PVC so GPU pods can mount it).
 

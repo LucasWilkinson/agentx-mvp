@@ -222,7 +222,8 @@ def read_kv_cache_tokens(run_dir):
 
 # --- Fallback when AIPerf server metrics were not captured: per-config kv-cache.yaml (scripts/kv-cache-info.sh)
 # or the saved pod logs, scaled by the role's data-parallel size from vllm-args.yaml. Values are totals
-# across ranks, like the vllm:cache_config_info sum above.
+# across DP ranks, like the vllm:cache_config_info sum above. TP and PCP ranks hold replicated KV (PCP
+# all-gathers every chunk's latent KV and writes it on every rank, vllm/v1/attention/ops/pcp.py), so no scaling.
 KV_LOG_RE = re.compile(r'GPU KV cache size: ([\d,]+) tokens')
 KV_YAML_RE = re.compile(r'^(prefill|decode)\S*:\s*$|^\s+kv_cache_tokens:\s*(\d+)\s*$', re.M)
 DP_YAML_RE = re.compile(r'^(prefill|decode)\S*:\s*$|^\s+data-parallel-size:\s*(\d+)\s*$', re.M)
@@ -385,6 +386,257 @@ def highlight_yaml(text):
     return '\n'.join(out)
 
 
+# ── Compare mode (pin two or more runs and overlay their Grafana panel series) ──
+COMPARE_CSS = """
+  .side-panel iframe.hidden { display: none; }
+  .compare-view { flex: 1; overflow-y: auto; padding: 8px 12px 24px; display: none; }
+  .compare-view.open { display: block; }
+  .compare-view .grid { grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); }
+  .compare-view .panel { height: auto; }
+  .compare-view .plot { width: 100%; height: 240px; }
+  .compare-view .row-header { margin: 12px 0 6px 0; font-size: 14px; }
+  .compare-legend { display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 6px 4px 10px; font-size: 12px; }
+  .compare-legend .sw { display: inline-block; width: 22px; height: 3px; vertical-align: middle; margin-right: 6px; }
+  .compare-empty { color: #8e8e8e; font-size: 13px; padding: 40px 12px; text-align: center; }
+  .pin-bar { display: none; align-items: center; flex-wrap: wrap; gap: 6px; padding: 4px 4px 8px; font-size: 13px; }
+  .pin-bar.open { display: flex; }
+  .pin-bar .pin-label { color: #8e8e8e; margin-right: 4px; }
+  .pin-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid #3a3a3e; border-radius: 12px;
+              padding: 3px 8px 3px 10px; background: #181b1f; color: #d8d9da; }
+  .pin-chip .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .pin-chip .rm { background: none; border: none; color: #8e8e8e; cursor: pointer; font-size: 14px; line-height: 1; padding: 0 2px; }
+  .pin-chip .rm:hover { color: #fff; }
+  .pin-btn { background: none; border: 1px solid #3a3a3e; color: #d8d9da; border-radius: 4px; padding: 4px 10px;
+             cursor: pointer; font-size: 12px; font-family: inherit; }
+  .pin-btn:hover { background: #2a2a2e; }
+  .pin-btn.active { border-color: #6ED0E0; color: #6ED0E0; }
+"""
+
+COMPARE_JS = r"""
+// ── Compare mode: pin several runs and overlay their dashboard panel series ──
+const sidePanelCompare = document.getElementById('sidePanelCompare');
+const pinBar = document.getElementById('pinBar');
+const pinChips = document.getElementById('pinChips');
+const compareToggle = document.getElementById('compareToggle');
+const parsedDashboards = {};
+const pinned = [];            // [{cfg, conc}] in pin order
+let compareMode = false;      // when on, plain clicks pin instead of opening the single dashboard
+const MAX_PINNED = 4;
+const DASHES = ['solid', 'dash', 'dot', 'dashdot', 'longdash', 'longdashdot'];
+const COMPARE_UNIT_LABEL = { tps: 'tokens/s', reqps: 'requests/s', ops: 'ops/s', percentunit: '%', percent: '%',
+                             s: 'seconds', bytes: 'bytes', Bps: 'bytes/s', watt: 'watts', short: 'count' };
+
+function decodeDashboard(key) {
+  const bin = atob(DASHBOARDS[key]);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new TextDecoder('utf-8').decode(bytes);
+}
+
+// Pull the `const panels = {...};` / `const rows = [...];` JSON out of an exported dashboard.html
+function parseDashboard(key) {
+  if (parsedDashboards[key] !== undefined) return parsedDashboards[key];
+  let parsed = null;
+  if (DASHBOARDS[key]) {
+    const html = decodeDashboard(key);
+    const pm = html.match(/^const panels = (.*);$/m);
+    const rm = html.match(/^const rows = (.*);$/m);
+    if (pm) {
+      const panels = JSON.parse(pm[1]);
+      const rows = rm ? JSON.parse(rm[1]) : [];
+      let t0 = Infinity;
+      for (const p of Object.values(panels))
+        for (const q of p.queries) for (const s of q.series)
+          if (s.values.length && s.values[0][0] < t0) t0 = s.values[0][0];
+      parsed = { panels, rows, t0: isFinite(t0) ? t0 : 0 };
+    }
+  }
+  parsedDashboards[key] = parsed;
+  return parsed;
+}
+
+function compareSeriesLabel(q, s) {
+  let l = q.legend;
+  if (l) {
+    for (const [k, v] of Object.entries(s.labels)) l = l.split('{{' + k + '}}').join(v);
+    if (!l.includes('{{')) return l;
+  }
+  const parts = Object.entries(s.labels).filter(([k]) => k !== '__name__');
+  return parts.length ? parts.map(([k, v]) => k + '=' + v).join(', ') : q.expr.slice(0, 60);
+}
+
+function mixWhite(hex, f) {
+  const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
+  if (!m) return hex;
+  const c = m.slice(1).map(h => Math.round(parseInt(h, 16) * (1 - f) + 255 * f));
+  return '#' + c.map(v => v.toString(16).padStart(2, '0')).join('');
+}
+function runKey(r) { return r.cfg + '_' + r.conc; }
+function runLabel(r) { return `${CONFIGS[r.cfg].label} @ c${C_LABELS[r.conc]}`; }
+function runColor(r, idx) {
+  const base = COLORS[r.cfg] || '#d8d9da';
+  const dup = pinned.slice(0, idx).filter(o => o.cfg === r.cfg).length;  // same config pinned twice: lighten
+  return dup ? mixWhite(base, Math.min(0.6, 0.3 * dup)) : base;
+}
+
+function updatePinBar() {
+  pinChips.innerHTML = '';
+  pinned.forEach((r, i) => {
+    const chip = document.createElement('span');
+    chip.className = 'pin-chip';
+    chip.innerHTML = `<span class="dot" style="background:${runColor(r, i)}"></span><span>${runLabel(r)}</span>`;
+    const rm = document.createElement('button');
+    rm.className = 'rm'; rm.title = 'Unpin'; rm.textContent = '×';
+    rm.addEventListener('click', () => { pinned.splice(i, 1); updatePinBar(); if (sidePanelCompare.classList.contains('open')) openCompare(); });
+    chip.appendChild(rm);
+    pinChips.appendChild(chip);
+  });
+  pinBar.classList.toggle('open', pinned.length > 0 || compareMode);
+}
+
+function pinRun(cfg, conc) {
+  const idx = pinned.findIndex(r => r.cfg === cfg && r.conc === conc);
+  if (idx < 0) {
+    if (pinned.length >= MAX_PINNED) pinned.pop();   // keep the first N-1, replace the last one
+    pinned.push({ cfg, conc });
+  }
+  updatePinBar();
+  openCompare();
+}
+
+function clearPins() {
+  pinned.length = 0;
+  updatePinBar();
+  if (sidePanelCompare.classList.contains('open')) closeDashboard();
+}
+
+const compareObserver = new IntersectionObserver((entries) => {
+  entries.forEach(entry => {
+    if (!entry.isIntersecting) return;
+    const div = entry.target;
+    compareObserver.unobserve(div);
+    const { traces, unit } = div._compare;
+    const plotDiv = div.querySelector('.plot');
+    const yTitle = COMPARE_UNIT_LABEL[unit] || unit || '';
+    Plotly.newPlot(plotDiv, traces, {
+      margin: { l: 58, r: 16, t: 4, b: 36 },
+      paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
+      font: { color: '#8e8e8e', size: 10 },
+      xaxis: { gridcolor: '#2a2a2e', linecolor: '#2a2a2e', ticksuffix: 's',
+               title: { text: 'seconds since run start', font: { size: 10 } } },
+      yaxis: { gridcolor: '#2a2a2e', linecolor: '#2a2a2e', tickformat: '.3s', hoverformat: '.4g',
+               title: yTitle ? { text: yTitle, font: { size: 10 } } : undefined },
+      legend: { font: { size: 9 }, orientation: 'h', y: -0.35 },
+      showlegend: true,
+      hovermode: 'x unified',
+      hoverlabel: { bgcolor: '#23262b', bordercolor: '#3a3a3e', font: { size: 11, color: '#ffffff' } },
+    }, { responsive: true, displayModeBar: false });
+  });
+}, { root: sidePanelCompare, rootMargin: '200px' });
+
+new ResizeObserver(() => {
+  sidePanelCompare.querySelectorAll('.plot').forEach(p => { if (p._fullLayout) Plotly.Plots.resize(p); });
+}).observe(sidePanelCompare);
+
+function renderCompare() {
+  sidePanelCompare.innerHTML = '';
+  const runs = pinned.map((r, i) => ({ ...r, data: parseDashboard(runKey(r)), color: runColor(r, i), label: runLabel(r) }))
+                     .filter(r => r.data);
+  if (!runs.length) {
+    sidePanelCompare.innerHTML = '<div class="compare-empty">No dashboards available for the pinned runs.</div>';
+    return;
+  }
+  const legend = document.createElement('div');
+  legend.className = 'compare-legend';
+  legend.innerHTML = runs.map(r => `<span><span class="sw" style="background:${r.color}"></span>${r.label}</span>`).join('');
+  sidePanelCompare.appendChild(legend);
+
+  // Section/panel order follows the first pinned run; panels only present in other runs go at the end.
+  const sections = [];
+  let cur = { title: '', ids: [] };
+  const seen = new Set();
+  for (const item of runs[0].data.rows) {
+    if (item.type === 'row') { if (cur.ids.length) sections.push(cur); cur = { title: item.title, ids: [] }; }
+    else if (item.type === 'panel') { cur.ids.push(String(item.id)); seen.add(String(item.id)); }
+  }
+  if (cur.ids.length) sections.push(cur);
+  const extra = { title: 'Other', ids: [] };
+  for (const r of runs) for (const id of Object.keys(r.data.panels)) if (!seen.has(id)) { seen.add(id); extra.ids.push(id); }
+  if (extra.ids.length) sections.push(extra);
+
+  for (const sec of sections) {
+    const grid = document.createElement('div');
+    grid.className = 'grid';
+    if (sec.title) {
+      const h = document.createElement('div');
+      h.className = 'row-header';
+      h.innerHTML = '<span class="arrow">&#9660;</span> ' + sec.title;
+      h.addEventListener('click', () => { h.classList.toggle('collapsed'); grid.classList.toggle('hidden'); });
+      sidePanelCompare.appendChild(h);
+    }
+    sidePanelCompare.appendChild(grid);
+    for (const id of sec.ids) {
+      const traces = [];
+      let title = null, unit = '';
+      for (const r of runs) {
+        const p = r.data.panels[id];
+        if (!p) continue;
+        if (title === null) { title = p.title; unit = p.unit; }
+        let si = 0;
+        for (const q of p.queries) for (const s of q.series) {
+          if (!s.values.length) continue;
+          traces.push({
+            x: s.values.map(v => v[0] - r.data.t0),
+            y: s.values.map(v => parseFloat(v[1])),
+            name: r.label + ' · ' + compareSeriesLabel(q, s),
+            type: 'scatter', mode: 'lines',
+            line: { width: 1.5, color: r.color, dash: DASHES[si % DASHES.length] },
+            hovertemplate: '%{y:.4g}<extra>%{fullData.name}</extra>',
+          });
+          si++;
+        }
+      }
+      if (title === null) continue;
+      const div = document.createElement('div');
+      div.className = 'panel';
+      div.innerHTML = '<div class="panel-title">' + title + '</div>';
+      if (!traces.length) {
+        div.innerHTML += '<div class="empty">No data</div>';
+        grid.appendChild(div);
+        continue;
+      }
+      const plotDiv = document.createElement('div');
+      plotDiv.className = 'plot';
+      div.appendChild(plotDiv);
+      grid.appendChild(div);
+      div._compare = { traces, unit };
+      compareObserver.observe(div);
+    }
+  }
+}
+
+function openCompare() {
+  if (!pinned.length) return;
+  sidePanelTitle.textContent = 'Compare: ' + pinned.map(runLabel).join(' vs ');
+  sidePanelFrame.src = 'about:blank';
+  sidePanelFrame.classList.add('hidden');
+  sidePanelCompare.classList.add('open');
+  renderCompare();
+  sidePanel.classList.add('open');
+  overlay.classList.add('open');
+}
+
+compareToggle.addEventListener('click', () => {
+  compareMode = !compareMode;
+  compareToggle.classList.toggle('active', compareMode);
+  compareToggle.textContent = compareMode ? 'Compare mode: on' : 'Compare mode: off';
+  updatePinBar();
+});
+document.getElementById('pinOpen').addEventListener('click', openCompare);
+document.getElementById('pinClear').addEventListener('click', clearPins);
+"""
+
+
 def generate_html(configs, output_path, results_dir, metric_units):
     model_label = read_model_label(results_dir)
     color_map = {}
@@ -524,17 +776,21 @@ def generate_html(configs, output_path, results_dir, metric_units):
         for cfg in sorted(configs_with_yamls):
             meta = configs_with_yamls[cfg]
             color = color_map.get(cfg, '#d8d9da')
+            safe_cfg = re.sub(r'[^A-Za-z0-9_-]', '-', cfg)
+            buttons, blocks = [], []
             for yname, ycontent in sorted(meta['yamls'].items()):
-                uid = f'yaml-{cfg}-{yname.replace(".", "-")}'
-                label = f'{meta["label"]} — {yname}'
-                highlighted = highlight_yaml(ycontent)
-                yaml_parts.append(
-                    f'<div class="yaml-section">'
+                uid = f'yaml-{safe_cfg}-{yname.replace(".", "-")}'
+                buttons.append(
                     f'<button class="yaml-toggle" style="border-color:{color};color:{color}" '
-                    f'onclick="document.getElementById(\'{uid}\').classList.toggle(\'open\')">{label}</button>'
-                    f'<div class="yaml-block" id="{uid}"><pre>{highlighted}</pre></div>'
-                    f'</div>'
-                )
+                    f'onclick="var t=document.getElementById(\'{uid}\'),s=this.closest(\'.yaml-section\');'
+                    f's.querySelectorAll(\'.yaml-block.open\').forEach(function(b){{if(b!==t)b.classList.remove(\'open\')}});'
+                    f't.classList.toggle(\'open\')">{yname}</button>')
+                blocks.append(f'<div class="yaml-block" id="{uid}"><pre>{highlight_yaml(ycontent)}</pre></div>')
+            yaml_parts.append(
+                f'<div class="yaml-section">'
+                f'<div class="yaml-cfg-label" style="color:{color}">{meta["label"]}</div>'
+                f'<div class="yaml-btn-row">{"".join(buttons)}</div>'
+                f'{"".join(blocks)}</div>')
         yaml_parts.append('</div>')
     yaml_sections_html = '\n'.join(yaml_parts)
 
@@ -578,7 +834,9 @@ def generate_html(configs, output_path, results_dir, metric_units):
   .summary tr:hover {{ background: #1e2127; }}
   .highlight {{ color: #58a6ff; font-weight: 500; }}
   .hidden {{ display: none; }}
-  .yaml-section {{ margin-bottom: 8px; }}
+  .yaml-section {{ margin-bottom: 12px; }}
+  .yaml-cfg-label {{ font-size: 13px; font-weight: 600; margin-bottom: 4px; }}
+  .yaml-btn-row {{ display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }}
   .yaml-toggle {{ background: none; border: 1px solid #2a2a2e; color: #8e8e8e; border-radius: 4px;
                    padding: 6px 14px; cursor: pointer; font-size: 12px; font-family: inherit; }}
   .yaml-toggle:hover {{ color: #d8d9da; border-color: #3a3a3e; }}
@@ -608,7 +866,7 @@ def generate_html(configs, output_path, results_dir, metric_units):
   .side-overlay {{ position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 999;
                    display: none; cursor: pointer; }}
   .side-overlay.open {{ display: block; }}
-</style>
+{COMPARE_CSS}</style>
 </head>
 <body>
 <h1>{model_label} Disaggregated Serving — Interactivity vs Throughput</h1>
@@ -623,6 +881,7 @@ def generate_html(configs, output_path, results_dir, metric_units):
     <button class="side-panel-close" id="sidePanelClose">Close</button>
   </div>
   <iframe id="sidePanelFrame"></iframe>
+  <div class="compare-view" id="sidePanelCompare"></div>
 </div>
 
 <script>
@@ -682,6 +941,8 @@ function openDashboard(cfg, conc) {{
     blobCache[key] = URL.createObjectURL(new Blob([bytes], {{ type: 'text/html;charset=utf-8' }}));
   }}
   sidePanelTitle.textContent = `${{CONFIGS[cfg].label}} @ c${{C_LABELS[conc]}} — Dashboard`;
+  sidePanelCompare.classList.remove('open');
+  sidePanelFrame.classList.remove('hidden');
   sidePanelFrame.src = blobCache[key];
   sidePanel.classList.add('open');
   overlay.classList.add('open');
@@ -691,6 +952,8 @@ function closeDashboard() {{
   sidePanel.classList.remove('open');
   overlay.classList.remove('open');
   sidePanelFrame.src = 'about:blank';
+  sidePanelCompare.classList.remove('open');
+  sidePanelFrame.classList.remove('hidden');
 }}
 
 document.getElementById('sidePanelClose').addEventListener('click', closeDashboard);
@@ -730,7 +993,10 @@ function attachClickHandler(plotEl) {{
     const cfg = CONFIG_KEYS[pt.curveNumber];
     const validConcs = CONCURRENCIES.filter(c => DATA[cfg] && DATA[cfg][c]);
     const conc = validConcs[pt.pointIndex];
-    if (cfg && conc) openDashboard(cfg, conc);
+    if (!cfg || !conc) return;
+    const ev = eventData.event || {{}};
+    if (compareMode || ev.shiftKey || ev.metaKey || ev.ctrlKey) pinRun(cfg, conc);
+    else openDashboard(cfg, conc);
   }});
 }}
 
@@ -1044,10 +1310,23 @@ const topBar = document.createElement('div');
 topBar.style.cssText = 'display:flex; justify-content:space-between; align-items:center; padding:12px 4px 8px; flex-wrap:wrap; gap:8px;';
 const hint = document.createElement('span');
 hint.style.cssText = 'color:#ffffff; font-size:15px;';
-hint.textContent = 'Click any data point to open its Prometheus dashboard.';
+hint.textContent = 'Click any data point to open its Prometheus dashboard. Shift+click (or turn on Compare mode) to pin runs and overlay their dashboards.';
 topBar.appendChild(hint);
+const compareToggleBtn = document.createElement('button');
+compareToggleBtn.id = 'compareToggle';
+compareToggleBtn.className = 'pin-btn';
+compareToggleBtn.textContent = 'Compare mode: off';
+topBar.appendChild(compareToggleBtn);
 
 root.appendChild(topBar);
+
+const pinBarEl = document.createElement('div');
+pinBarEl.id = 'pinBar';
+pinBarEl.className = 'pin-bar';
+pinBarEl.innerHTML = '<span class="pin-label">Pinned runs:</span><span id="pinChips" style="display:contents"></span>'
+  + '<button class="pin-btn" id="pinOpen">Open comparison</button><button class="pin-btn" id="pinClear">Clear</button>';
+root.appendChild(pinBarEl);
+{COMPARE_JS}
 
 // ── Charts: two side by side ──
 const chartRow = document.createElement('div');

@@ -16,7 +16,7 @@ VLLM_IMAGE = os.environ.get("VLLM_IMAGE", "")  # optional override of the model-
 KUEUE_QUEUE = os.environ.get("KUEUE_QUEUE", "")  # optional Kueue LocalQueue; admission gates the model pods
 
 KEEP_KINDS = {"Deployment", "LeaderWorkerSet", "Service", "ConfigMap", "ServiceAccount"}
-DROP_NAME_PARTS = ("-infpool", "-gateway", "-epp")
+DROP_NAME_PARTS = ("-infpool", "-gateway", "-epp", "-envoy")
 
 docs = [d for d in yaml.safe_load_all(sys.stdin) if d]
 kept = [

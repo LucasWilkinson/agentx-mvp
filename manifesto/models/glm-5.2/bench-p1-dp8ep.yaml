@@ -1,0 +1,8 @@
+# DP8+EP prefill alone, no profiler (torch profiler + DP external-LB crashed the rank-0 API server on
+# CUPTI init, 2026-08-25). For plain single-request / 8-way timing against the PCP variants.
+extends: prof-p1-dp8ep.yaml
+release: glm52-bench-p1-dp8ep
+roles:
+  prefill:
+    vllm_raw_args:
+      - -cc.cudagraph_mode=NONE

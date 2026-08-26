@@ -16,7 +16,6 @@ model:
   image: quay.io/rh-ee-lwilkins/vllm-envs-cuda:pr8-cv2
 routing: {kind: pd, target_role: decode}
 runtime:
-  dev: true
   sidecars: []
   env:
     VLLM_USE_DEEP_GEMM: "1"

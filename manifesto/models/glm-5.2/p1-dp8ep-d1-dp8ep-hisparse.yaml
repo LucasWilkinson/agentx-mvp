@@ -1,0 +1,14 @@
+# Reference layout with the decode role on nm/glm-53-blog/decoder (main + vllm-project/vllm#53592, HiSparse:
+# host-resident sparse-MLA KV with a GPU hot buffer). Setting attention_config.hisparse_config enables it and
+# vLLM composes HiSparseConnector with the NIXL consumer automatically (MultiConnector); it requires Model
+# Runner V2 (VLLM_USE_V2_MODEL_RUNNER=1 is already in the cluster fabric env).
+extends: p1-dp8ep-d1-dp8ep.yaml
+release: glm52-p1-dp8ep-d1-dp8ep-hisparse
+roles:
+  decode:
+    env:
+      MANIFESTO_VLLM_ENV: /workspace/vdptest/glm53-decoder   # `ve` env built from nm/glm-53-blog/decoder
+    # host_pool_gib is per DP replica: 8 ranks x 100 GiB pinned host memory on a 2 TiB node.
+    resources: {memory: 1200Gi}
+    vllm_raw_args:
+      - --attention-config.hisparse_config='{"host_pool_gib":100}'   # raw args are pasted into bash verbatim: keep the JSON quoted

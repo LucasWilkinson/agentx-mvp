@@ -1,0 +1,16 @@
+# Profiling-only variant: the DP8+EP prefill role alone (8 GPUs), no NIXL/offload, torch profiler on.
+# Keeps the multi-port external DP load balancing of the real layout (llm-d sidecar on 8000, ranks on
+# 8200-8207; routing objects are stripped by filter-render). Hit rank 0 directly on 8200 for a
+# single-GPU measurement; /start_profile and /stop_profile there.
+extends: p1-dp8ep-d1-dp8ep.yaml
+release: glm52-prof-p1-dp8ep
+topology: aggregated
+routing: {kind: load_aware, target_role: prefill}
+roles:
+  decode: $delete
+  prefill:
+    kv_transfer_config: $delete
+    vllm_raw_args:
+      - -cc.cudagraph_mode=NONE
+      - --profiler-config.profiler=torch
+      - --profiler-config.torch_profiler_dir=/workspace/profiles/prof-p1-dp8ep

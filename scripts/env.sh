@@ -42,7 +42,7 @@ require_agentx_env() {
 k() { kubectl --context "$KUBE_CONTEXT" -n "$NAMESPACE" "$@"; }
 
 manifesto() {
-  [[ -d "$MANIFESTO_ROOT" ]] || { echo "ERROR: MANIFESTO_ROOT=$MANIFESTO_ROOT not found (git clone https://github.com/tlrmchlsmth/llm-manifesto)" >&2; exit 2; }
+  [[ -d "$MANIFESTO_ROOT" ]] || { echo "ERROR: MANIFESTO_ROOT=$MANIFESTO_ROOT not found (git clone https://github.com/neuralmagic/llm-manifesto)" >&2; exit 2; }
   uv run --quiet --project "$MANIFESTO_ROOT" manifesto "$@"
 }
 
@@ -60,7 +60,12 @@ render_model() {
   local spec="$1"
   local dev_args=()
   if [[ -n "$VLLM_ENV" ]]; then
-    dev_args=(--dev-venv "$VLLM_ENV/.venv" --dev-source "$VLLM_ENV")
+    # neuralmagic/llm-manifesto takes the vllm-envs worktree as --vllm-env; older forks used --dev-venv/--dev-source.
+    if manifesto render manifest --help 2>/dev/null | grep -q -- '--vllm-env'; then
+      dev_args=(--vllm-env "$VLLM_ENV")
+    else
+      dev_args=(--dev-venv "$VLLM_ENV/.venv" --dev-source "$VLLM_ENV")
+    fi
   fi
   manifesto render manifest "$spec" --cluster "$MANIFESTO_CLUSTER" --namespace "$NAMESPACE" --user "$MANIFESTO_USER" "${dev_args[@]}" \
     | VLLM_IMAGE="$VLLM_IMAGE" uv run --quiet --project "$MANIFESTO_ROOT" python scripts/filter-render.py
