@@ -41,6 +41,10 @@ for spec in "${specs[@]}"; do
       echo "FAILED: $config c=$c" >&2; failed+=("${config}_c${c}")
     fi
   done
+  if [[ "${ACCURACY_CHECK:-0}" == "1" ]]; then
+    echo "======== $config accuracy"
+    scripts/accuracy-check.sh "$local_dir/accuracy" || { echo "FAILED: $config accuracy" >&2; failed+=("${config}_accuracy"); }
+  fi
   for pod in $(k get pods -l "$selector" -o jsonpath='{.items[*].metadata.name}'); do
     k logs "$pod" --all-containers > "$local_dir/logs/${pod}.log" 2>&1 || true
   done

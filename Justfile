@@ -52,6 +52,10 @@ monitoring:
 monitor:
     scripts/grafana.sh
 
+# Accuracy smoke check (lm_eval gsm8k, 5-shot, ACCURACY_LIMIT samples) against the served model: just accuracy [out-dir]
+accuracy out="":
+    scripts/accuracy-check.sh {{out}}
+
 # List benchmark Jobs.
 status:
     scripts/status.sh
