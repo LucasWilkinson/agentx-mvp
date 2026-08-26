@@ -166,3 +166,14 @@ Branch-specific args belong in the same variant spec (see `manifesto/models/glm-
 `extends` deep-merges mappings but *replaces* lists, so restate `vllm_raw_args` to drop a parent flag, and use
 `key: $delete` to remove a mapping entry. `vllm_env.txt` in each sweep config dir records env, commit and branch
 per role.
+
+## PCP x DCP prefill (branch `nm/glm-53-blog/prefiller`)
+
+`p1-pcp8dcp8ep-d1-dp8ep.yaml` runs the prefill as PCP8 x DCP8 x TP1 + EP: DCP spans the PCP group, so the KV cache is
+block-sharded across the 8 ranks (2.45M-token pool instead of 306k replicated) and every rank serves its shard to the
+DP8 (DCP1) decoder over NIXL. Both roles must run the branch env (`MANIFESTO_VLLM_ENV: /workspace/vdptest/glm53-prefiller`):
+the decoder needs vllm-project/vllm#50611's DCP-aware NIXL reads. Prefill-only probes: `prof-`/`bench-p1-pcp8ep-dcp8*.yaml`;
+`scripts/prefill-check.py` + `/tmp/compare-check.py` compare first-token top-5 logprobs against a replicated-KV baseline.
+Known cost: the sparse attention gathers queries across the PCP group and reduce-scatters merged outputs, so single-prompt
+prefill throughput is ~0.4x replicated PCP; the win is the 8x prefix-cache pool. Profiling (`prof-*`) wedges the API
+server after `/stop_profile` with large traces, so use `bench-*` specs for timing.

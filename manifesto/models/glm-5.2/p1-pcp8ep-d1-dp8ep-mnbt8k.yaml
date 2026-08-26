@@ -1,0 +1,10 @@
+# PCP8+EP prefill with 8k chunks (1024 tokens per PCP rank per step) at the full 163840 model len.
+# Profiling showed PCP prefill is communication-latency bound at 4k chunks (512 tok/rank/step):
+# 4k -> 16k gave +62% on an 82k prompt; 16k does not fit KV at 163840 on main, 8k should
+# (non-torch memory grows ~1.4 GiB per 4k of chunk).
+extends: p1-pcp8ep-d1-dp8ep.yaml
+release: glm52-p1-pcp8ep-d1-dp8ep-mnbt8k
+roles:
+  prefill:
+    vllm:
+      max_num_batched_tokens: 8192

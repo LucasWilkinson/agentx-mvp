@@ -1,0 +1,20 @@
+# Prefill PCP8 x DCP8 x TP1 + EP (DeepEP-HT) on nm/glm-53-blog/prefiller: DCP spanning the PCP group
+# block-shards the KV cache across the 8 ranks (8x the replicated PCP pool) and every rank serves its
+# shard to the decoder over NIXL (branch patch on top of vllm-project/vllm#50611). Decode DP8+EP (DCP1)
+# reads all 8 shards. 16 GPUs.
+extends: p1-pcp8ep-d1-dp8ep.yaml
+release: glm52-p1-pcp8dcp8ep-d1-dp8ep
+roles:
+  # The consumer needs PR #50611's DCP-aware NIXL reads too, so it runs the same branch env (DCP1 there).
+  decode:
+    env:
+      MANIFESTO_VLLM_ENV: /workspace/vdptest/glm53-prefiller
+  prefill:
+    env:
+      MANIFESTO_VLLM_ENV: /workspace/vdptest/glm53-prefiller
+    vllm_raw_args:
+      - --tensor-parallel-size 1
+      - --prefill-context-parallel-size 8
+      - --decode-context-parallel-size 8
+      - --dcp-comm-backend ag_rs   # FlashMLA sparse only validates ag_rs; the model default under PCP is a2a
+      - -cc.cudagraph_mode=NONE

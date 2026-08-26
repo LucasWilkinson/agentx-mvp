@@ -1,0 +1,17 @@
+# PCP8+EP prefill-only on nm/glm-53-blog/prefiller with PIECEWISE CUDA graphs via torch.compile
+# (VLLM_USE_BREAKABLE_CUDAGRAPH=0 opts out of main's auto-enabled breakable graphs, whose segment
+# capture fails under PCP with "capturing stream has unjoined work"). 4k chunks like the sweep.
+extends: prof-p1-pcp8ep-glm53.yaml
+release: glm52-prof-p1-pcp8ep-glm53-pw
+roles:
+  prefill:
+    env:
+      VLLM_USE_BREAKABLE_CUDAGRAPH: "0"
+    vllm:
+      max_num_batched_tokens: 4096
+    vllm_raw_args:
+      - --tensor-parallel-size 1
+      - --prefill-context-parallel-size 8
+      - -cc.cudagraph_mode=PIECEWISE
+      - --profiler-config.profiler=torch
+      - --profiler-config.torch_profiler_dir=/workspace/profiles/prof-p1-pcp8ep-glm53-pw
