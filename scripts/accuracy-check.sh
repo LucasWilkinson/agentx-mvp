@@ -6,7 +6,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/env.sh; load_agentx_env; require_agentx_env KUBE_CONTEXT NAMESPACE URL MODEL
 out_dir="${1:-results/accuracy/$(date +%Y%m%dT%H%M%SZ)}"; mkdir -p "$out_dir"
-tasks="${ACCURACY_TASKS:-gsm8k}"; limit="${ACCURACY_LIMIT:-200}"; conc="${ACCURACY_CONCURRENCY:-8}"
+tasks="${ACCURACY_TASKS:-gsm8k}"; limit="${ACCURACY_LIMIT:-200}"; conc="${ACCURACY_CONCURRENCY:-4}"
 devbox_env="${ACCURACY_DEVBOX_ENV:-/workspace/vdptest/glm53-prefiller}"
 remote_dir="/tmp/accuracy-$$"
 echo "accuracy: tasks=$tasks limit=$limit concurrency=$conc url=$URL model=$MODEL -> $out_dir"
@@ -14,8 +14,8 @@ k exec devbox -- bash -c "
 set -euo pipefail; source '$devbox_env/.venv/bin/activate'; mkdir -p '$remote_dir'
 export HF_HOME=/models/hf HF_HUB_OFFLINE=0
 lm_eval --model local-completions --tasks '$tasks' --num_fewshot 5 --limit '$limit' --batch_size 1 \
-  --model_args 'base_url=$URL/v1/completions,model=$MODEL,num_concurrent=$conc,max_retries=3,tokenized_requests=False,timeout=1800' \
-  --gen_kwargs 'temperature=0' --output_path '$remote_dir' --log_samples 2>&1 | tail -25"
+  --model_args 'base_url=$URL/v1/completions,model=$MODEL,num_concurrent=$conc,max_retries=5,tokenized_requests=False,timeout=1800' \
+  --gen_kwargs 'temperature=0' --output_path '$remote_dir' --log_samples > '$remote_dir/lm_eval.log' 2>&1; rc=\$?; tail -25 '$remote_dir/lm_eval.log'; exit \$rc"
 k cp "devbox:$remote_dir" "$out_dir" >/dev/null
 k exec devbox -- rm -rf "$remote_dir"
 python3 - "$out_dir" <<'PY'
