@@ -9,6 +9,4 @@ roles:
     env:
       MANIFESTO_VLLM_ENV: /workspace/vdptest/glm53-prefiller   # `ve` env built from nm/glm-53-blog/prefiller
     vllm_raw_args:
-      - --tensor-parallel-size 1
-      - --prefill-context-parallel-size 8
       - -cc.cudagraph_mode=PIECEWISE   # what the branch supports for sparse-MLA PCP (FULL is still rejected)

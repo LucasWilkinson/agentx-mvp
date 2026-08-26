@@ -10,11 +10,8 @@ roles:
     env:
       MANIFESTO_VLLM_ENV: /workspace/vdptest/glm53-prefiller
   prefill:
+    parallelism: {gpus: 8, tp: 1, pcp: 8, dcp: 8, dp: 1, ep: true}
     env:
       MANIFESTO_VLLM_ENV: /workspace/vdptest/glm53-prefiller
     vllm_raw_args:
-      - --tensor-parallel-size 1
-      - --prefill-context-parallel-size 8
-      - --decode-context-parallel-size 8
-      - --dcp-comm-backend ag_rs   # FlashMLA sparse only validates ag_rs; the model default under PCP is a2a
       - -cc.cudagraph_mode=NONE

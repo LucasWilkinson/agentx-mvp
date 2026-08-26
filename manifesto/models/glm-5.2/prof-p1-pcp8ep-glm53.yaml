@@ -9,8 +9,6 @@ roles:
     vllm:
       max_num_batched_tokens: 16384
     vllm_raw_args:
-      - --tensor-parallel-size 1
-      - --prefill-context-parallel-size 8
       - -cc.cudagraph_mode=NONE   # PIECEWISE: "capturing stream has unjoined work" during capture on this branch (2026-08-26)
       - --profiler-config.profiler=torch
       - --profiler-config.torch_profiler_dir=/workspace/profiles/prof-p1-pcp8ep-glm53

@@ -1,0 +1,55 @@
+# Target topology: PCP8 x TP1 x DCP8 + EP prefill, DP8 + EP decode.
+# Requires a PCP-DCP extension to vllm-project/vllm#50611 and enough TP1
+# weight headroom (PCP o_proj sharding with an FP8 adapter, or offload).
+extends: base.yaml
+release: glm52-p1-pcp8dcp8fp8-d1-dp8fp8-dspark-frankenstein
+model:
+  id: zai-org/GLM-5.2-FP8
+  label: GLM-5.2-FP8
+  served_name: zai-org/GLM-5.2-FP8
+vars:
+  dspark: &dspark
+    method: dspark
+    model: RedHatAI/GLM-5.2-speculator.dspark
+    num_speculative_tokens: 7
+    draft_sample_method: probabilistic
+    kv_cache_dtype: fp8
+roles:
+  prefill:
+    parallelism: {gpus: 8, tp: 1, pcp: 8, dcp: 8, dp: 1, ep: true}
+    env:
+      MANIFESTO_VLLM_ENV: /workspace/vdptest/frankenstein-prefiller-lucas-dcp
+      PYTHONPATH: /workspace/vdptest/frankenstein-prefiller-lucas-dcp
+      VLLM_USE_PCP_DIRECT_KV: "1"
+      VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS: "0"
+      VLLM_WORKER_MULTIPROC_METHOD: spawn
+      NVSHMEM_REMOTE_TRANSPORT: ibgda
+      NVSHMEM_IB_ENABLE_IBGDA: "true"
+      NVSHMEM_HCA_PREFIX: ibp
+      NVSHMEM_BOOTSTRAP_UID_SOCK_IFNAME: eth0
+      NVIDIA_GDRCOPY: enabled
+    vllm:
+      moe_backend: deep_gemm
+      # Null removes base.yaml's 163840 override; use the checkpoint default.
+      max_model_len: null
+      gpu_memory_utilization: 0.98
+      max_num_batched_tokens: 32768
+      max_num_seqs: 16
+      all2all_backend: deepep_high_throughput
+      speculative_config: *dspark
+  decode:
+    parallelism: {tp: 1, dp: 8, ep: true}
+    dp_load_balancing: external
+    env:
+      MANIFESTO_VLLM_ENV: /workspace/vdptest/frankenstein-prefiller-lucas-dcp
+      PYTHONPATH: /workspace/vdptest/frankenstein-prefiller-lucas-dcp
+      VLLM_WORKER_MULTIPROC_METHOD: spawn
+      NVSHMEM_QP_DEPTH: "1026"
+    vllm:
+      moe_backend: deep_gemm
+      all2all_backend: deepep_low_latency
+      max_model_len: 114688
+      gpu_memory_utilization: 0.985
+      max_num_batched_tokens: 512
+      max_num_seqs: 64
+      speculative_config: *dspark

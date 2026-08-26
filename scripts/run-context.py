@@ -6,7 +6,6 @@ inferencepool.yaml (router, from `helm get manifest` on stdin), and config_label
 Usage: run-context.py <config_dir> < router-manifest.yaml
 """
 import os
-import re
 import sys
 
 import yaml
@@ -48,15 +47,19 @@ if os.path.isfile(spec_path):
     parts = []
     for role in spec.get("roles", []):
         par = role.get("parallelism", {})
-        raw = " ".join(role.get("vllm_raw_args", []) or [])
-        tp, dp, ep = int(par.get("tp", 1)), int(par.get("dp", 1)), bool(par.get("ep"))
-        m = re.search(r"--prefill-context-parallel-size\s+(\d+)", raw)
-        if m:
-            layout = f"PCP{m.group(1)}"
+        tp = int(par.get("tp", 1))
+        pcp = int(par.get("pcp", 1))
+        dcp = int(par.get("dcp", 1))
+        dp = int(par.get("dp", 1))
+        ep = bool(par.get("ep"))
+        if pcp > 1:
+            layout = f"PCP{pcp}" + (f"xDCP{dcp}" if dcp > 1 else "")
+            if tp > 1:
+                layout += f"xTP{tp}"
         elif dp > 1:
             layout = f"DP{dp}" + (f"xTP{tp}" if tp > 1 else "")
         else:
-            layout = f"TP{tp}"
+            layout = f"TP{tp}" + (f"xDCP{dcp}" if dcp > 1 else "")
         if ep:
             layout += "+EP"
         replicas = int(role.get("replicas", 1) or 1)

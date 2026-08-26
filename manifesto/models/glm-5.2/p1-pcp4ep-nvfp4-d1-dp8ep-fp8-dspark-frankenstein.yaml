@@ -1,0 +1,48 @@
+# Roberto's Frankenstein prefiller configuration adapted to the existing P/D
+# harness: an NVFP4 PCP4+EP producer and the known FP8 DP8+EP consumer, with
+# DSpark on both roles. Both advertise the same served name for P/D routing.
+extends: base.yaml
+release: glm52-p1-pcp4nvfp4-d1-dp8fp8-dspark-frankenstein
+model:
+  id: nvidia/GLM-5.2-NVFP4
+  label: GLM-5.2-NVFP4
+  served_name: nvidia/GLM-5.2-NVFP4
+vars:
+  dspark: &dspark
+    method: dspark
+    model: RedHatAI/GLM-5.2-speculator.dspark
+    num_speculative_tokens: 7
+    draft_sample_method: probabilistic
+    kv_cache_dtype: fp8
+roles:
+  prefill:
+    parallelism: {gpus: 4, tp: 1, pcp: 4, dp: 1, ep: true}
+    env:
+      MANIFESTO_VLLM_ENV: /workspace/vdptest/frankenstein-prefiller-lucas
+      VLLM_USE_PCP_DIRECT_KV: "1"
+      VLLM_WORKER_MULTIPROC_METHOD: spawn
+      NVSHMEM_REMOTE_TRANSPORT: ibgda
+      NVSHMEM_IB_ENABLE_IBGDA: "true"
+      NVSHMEM_HCA_PREFIX: ibp
+      NVSHMEM_BOOTSTRAP_UID_SOCK_IFNAME: eth0
+      NVIDIA_GDRCOPY: enabled
+    vllm:
+      moe_backend: auto
+      max_num_batched_tokens: 32768
+      max_num_seqs: 256
+      all2all_backend: deepep_high_throughput
+      speculative_config: *dspark
+  decode:
+    model: zai-org/GLM-5.2-FP8
+    parallelism: {tp: 1, dp: 8, ep: true}
+    dp_load_balancing: external
+    env:
+      MANIFESTO_VLLM_ENV: /workspace/vdptest/frankenstein-prefiller-lucas
+      VLLM_WORKER_MULTIPROC_METHOD: spawn
+      NVSHMEM_QP_DEPTH: "1026"
+    vllm:
+      moe_backend: deep_gemm
+      all2all_backend: deepep_low_latency
+      max_num_batched_tokens: 512
+      max_num_seqs: 64
+      speculative_config: *dspark

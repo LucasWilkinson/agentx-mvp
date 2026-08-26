@@ -10,8 +10,6 @@ roles:
     vllm:
       max_num_batched_tokens: 4096
     vllm_raw_args:
-      - --tensor-parallel-size 1
-      - --prefill-context-parallel-size 8
       - -cc.cudagraph_mode=PIECEWISE
       - --profiler-config.profiler=torch
       - --profiler-config.torch_profiler_dir=/workspace/profiles/prof-p1-pcp8ep-glm53-pw

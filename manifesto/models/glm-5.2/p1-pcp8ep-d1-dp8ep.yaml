@@ -1,12 +1,9 @@
 # 1 prefill pod PCP8 + EP (TP1 x prefill-context-parallel 8) + 1 decode pod DP8+EP. 16 GPUs.
-# manifesto has no PCP notion and rejects tp:1 on an 8-GPU pod, so the role is declared TP8
-# (correct pod sizing and --device-ids) and vllm_raw_args re-issue the real parallelism;
-# argparse keeps the last occurrence.
 extends: base-offload.yaml
 release: glm52-p1-pcp8ep-d1-dp8ep
 roles:
   prefill:
-    parallelism: {tp: 8, dp: 1, ep: true}
+    parallelism: {gpus: 8, tp: 1, pcp: 8, dp: 1, ep: true}
     # Same NIXL + CPU offloading stack as base-offload.yaml, but the inner NixlConnector must be kv_producer:
     # NixlConnector under PCP rejects kv_both ("PCP currently supports kv_producer only").
     kv_transfer_config:
@@ -36,8 +33,6 @@ roles:
       # (see below) so it does not need the capture reserve that base.yaml's 0.90 leaves for TP8 prefill.
       gpu_memory_utilization: "0.92"   # was 0.95; warmup then OOMed once DeepEP-HT + offloading were added
     vllm_raw_args:
-      - --tensor-parallel-size 1
-      - --prefill-context-parallel-size 8
       # vLLM: "MRV2 sparse MLA PCP does not support CUDA graphs yet" -> graphs off (torch.compile stays on)
       # for this prefill role only. Prefill is compute-bound so this costs little.
       - -cc.cudagraph_mode=NONE
