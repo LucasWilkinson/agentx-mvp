@@ -16,6 +16,9 @@ roles:
     env:
       MANIFESTO_VLLM_ENV: /workspace/vdptest/glm53-prefiller   # newer main; vllm-main's DSpark asserts in the profile run
     vllm:
+      # the drafter emits 7 query tokens per request into buffers sized at max_num_batched_tokens (2048),
+      # so the default max_num_seqs (1024) overflowed them in the profile run: 256 x 7 = 1792 <= 2048
+      max_num_seqs: 256
       # no adaptive verification here: MRV2 requires CUDA graphs for it and the offload
       # connector forces cudagraph_mode=NONE on this role (the prefiller never verifies anyway)
       speculative_config:
