@@ -11,7 +11,7 @@ for spec in "$@"; do
   scripts/deploy-model.sh "$spec" || echo "deploy failed: $name (collecting logs anyway)"
   for pod in $(k get pods -l 'llm-d.ai/inferenceServing=true' -o jsonpath='{.items[*].metadata.name}'); do
     k logs "$pod" -c vllm > "$out/${name}_${pod}.log" 2>&1 || true
-    grep -E "MEMTRACE|Actual usage is|Available KV cache memory|Model loading took" "$out/${name}_${pod}.log" | grep -E "PCP0|EngineCore" | sed -E 's/.*\] //' > "$out/${name}_summary.txt" || true
+    grep -E "MEMTRACE|MEMSNAP|Actual usage is|Available KV cache memory|Model loading took" "$out/${name}_${pod}.log" | grep -E "PCP0|EngineCore" | sed -E 's/.*\] //' > "$out/${name}_summary.txt" || true
   done
   scripts/teardown-model.sh --all
 done

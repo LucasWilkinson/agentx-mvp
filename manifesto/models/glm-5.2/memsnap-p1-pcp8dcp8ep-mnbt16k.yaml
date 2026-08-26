@@ -1,0 +1,7 @@
+# Memory attribution with allocator snapshot: memtrace-p1-pcp8dcp8ep-mnbt16k + VLLM_MEM_TRACE_SNAPSHOT=1.
+extends: memtrace-p1-pcp8dcp8ep-mnbt16k.yaml
+release: glm52-memsnap-p1-pcp8dcp8ep-mnbt16k
+roles:
+  prefill:
+    env:
+      VLLM_MEM_TRACE_SNAPSHOT: "1"
