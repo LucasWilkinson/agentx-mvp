@@ -1,0 +1,10 @@
+# Memory attribution run: prefill-only PCP8 x DCP8 + EP with 16k chunks and VLLM_MEM_TRACE=1 (branch debug hook).
+# Deploy, collect the MEMTRACE lines from the prefill log, tear down. No benchmark.
+extends: bench-p1-pcp8ep-dcp8.yaml
+release: glm52-memtrace-p1-pcp8dcp8ep-mnbt16k
+roles:
+  prefill:
+    env:
+      VLLM_MEM_TRACE: "1"
+    vllm:
+      max_num_batched_tokens: 16384
