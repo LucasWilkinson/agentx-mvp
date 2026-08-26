@@ -1,0 +1,27 @@
+# PCP8 x DCP8 prefill (8k chunks) + DP8 decode with DSpark on both roles. The prefiller only drafts
+# (kv producer, never verifies); the drafter runs replicated over the global batch on every PCP rank.
+extends: p1-pcp8dcp8ep-d1-dp8ep-mnbt8k.yaml
+release: glm52-p1-pcp8dcp8ep-d1-dp8ep-dspark
+vars:
+  dspark: &dspark
+    method: dspark
+    model: RedHatAI/GLM-5.2-speculator.dspark
+    num_speculative_tokens: 7
+    enable_adaptive_verification: true
+    # the drafter is a dense Qwen3-style model: it cannot use the target's fp8_ds_mla KV layout
+    kv_cache_dtype: fp8
+roles:
+  prefill:
+    vllm:
+      # drafter query buffers are sized at max_num_batched_tokens (8192): max_num_seqs x 7 must fit
+      max_num_seqs: 256
+      # no adaptive verification here: MRV2 requires CUDA graphs for it and sparse-MLA PCP forbids them
+      speculative_config:
+        method: dspark
+        model: RedHatAI/GLM-5.2-speculator.dspark
+        num_speculative_tokens: 7
+        kv_cache_dtype: fp8
+  decode:
+    vllm:
+      speculative_config: *dspark
+      max_num_batched_tokens: 512

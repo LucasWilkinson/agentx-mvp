@@ -2,11 +2,23 @@
 # manifesto has no PCP notion and rejects tp:1 on an 8-GPU pod, so the role is declared TP8
 # (correct pod sizing and --device-ids) and vllm_raw_args re-issue the real parallelism;
 # argparse keeps the last occurrence.
-extends: base.yaml
+extends: base-offload.yaml
 release: glm52-p1-pcp8ep-d1-dp8ep
 roles:
   prefill:
     parallelism: {tp: 8, dp: 1, ep: true}
+    # Same NIXL + CPU offloading stack as base-offload.yaml, but the inner NixlConnector must be kv_producer:
+    # NixlConnector under PCP rejects kv_both ("PCP currently supports kv_producer only").
+    kv_transfer_config:
+      kv_connector: MultiConnector
+      kv_role: kv_both
+      kv_load_failure_policy: fail
+      kv_connector_extra_config:
+        connectors:
+          - {kv_connector: NixlConnector, kv_role: kv_producer, kv_connector_extra_config: {enforce_handshake_compat: false}}
+          - kv_connector: OffloadingConnector
+            kv_role: kv_both
+            kv_connector_extra_config: {spec_name: TieringOffloadingSpec, cpu_bytes_to_use: 107374182400, eviction_policy: lru}
     # PCP counts as a DP-like EP layout in vLLM (use_all2all_kernels: ep and (dp>1 or pcp>1)), so DeepEP
     # high-throughput dispatch applies here (it does not for TP8+EP prefill, which is dp=1/pcp=1).
     env:
