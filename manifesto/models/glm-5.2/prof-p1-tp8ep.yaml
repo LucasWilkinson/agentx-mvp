@@ -1,0 +1,14 @@
+# Profiling-only variant: the TP8+EP prefill role alone (8 GPUs), no router/NIXL/offload, torch profiler on.
+extends: p1-tp8ep-d1-dp8ep.yaml
+release: glm52-prof-p1-tp8ep
+topology: aggregated
+routing: {kind: disabled, target_role: prefill}
+roles:
+  decode: $delete
+  prefill:
+    routing_proxy: false
+    dp_load_balancing: $delete
+    kv_transfer_config: $delete
+    vllm_raw_args:
+      - --profiler-config.profiler=torch
+      - --profiler-config.torch_profiler_dir=/workspace/profiles/prof-p1-tp8ep

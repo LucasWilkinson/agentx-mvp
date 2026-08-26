@@ -1,0 +1,16 @@
+# PCP8+EP prefill-only profiling on nm/glm-53-blog/prefiller (PR #53515: PCP-aware profile run + piecewise
+# CUDA graphs for sparse-MLA PCP). 16k chunks at the full 163840 model len.
+extends: prof-p1-pcp8ep.yaml
+release: glm52-prof-p1-pcp8ep-glm53
+roles:
+  prefill:
+    env:
+      MANIFESTO_VLLM_ENV: /workspace/vdptest/glm53-prefiller
+    vllm:
+      max_num_batched_tokens: 16384
+    vllm_raw_args:
+      - --tensor-parallel-size 1
+      - --prefill-context-parallel-size 8
+      - -cc.cudagraph_mode=NONE   # PIECEWISE: "capturing stream has unjoined work" during capture on this branch (2026-08-26)
+      - --profiler-config.profiler=torch
+      - --profiler-config.torch_profiler_dir=/workspace/profiles/prof-p1-pcp8ep-glm53
