@@ -31,6 +31,10 @@ roles:
       gpu_memory_utilization: 0.95
       max_num_batched_tokens: 16384
       max_num_seqs: 16
+      # Breakable graph replay currently strands the PCP/DCP collective before
+      # the first DeepEP dispatch. Keep torch eager execution without setting
+      # --enforce-eager so DeepGEMM and the selected attention kernels remain.
+      compilation_config: {cudagraph_mode: NONE}
       speculative_config:
         method: dspark
         model: RedHatAI/GLM-5.2-speculator.dspark
