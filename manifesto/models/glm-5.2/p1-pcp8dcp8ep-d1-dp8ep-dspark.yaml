@@ -11,27 +11,15 @@ roles:
       PYTHONPATH: /workspace/vdptest/frankenstein-prefiller-lucas-dcp
       VLLM_USE_PCP_DIRECT_KV: "1"
       VLLM_USE_DIRECT_DCP_KV_GATHER: "0"
-      # Use the non-torch.compile capture path. Operations decorated with
-      # eager_break_during_capture execute between breakable graph segments.
-      VLLM_USE_BREAKABLE_CUDAGRAPH: "1"
-      VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS: "0"
-      # Let ElasticBuffer overlap with compute instead of imposing its
-      # non-overlap 64-SM floor; DCP collectives need room to make progress.
-      VLLM_DEEPEP_V2_PREFER_OVERLAP: "1"
     vllm:
       # Null omits --max-model-len and uses the checkpoint default.
       max_model_len: null
-      # DeepEP HT is not CUDA-graph compatible. DeepEP v2 uses its
-      # cudagraph-safe ElasticBuffer path while retaining FP8 dispatch.
-      all2all_backend: deepep_v2
+      all2all_backend: deepep_high_throughput
       dcp_comm_backend: ag_rs
-      # DCP8 needs 9.58 GiB for the checkpoint's 1,048,576-token default
-      # context; DeepEP v2 leaves 7.83 GiB at 0.935, so reserve 0.95.
-      gpu_memory_utilization: 0.95
+      gpu_memory_utilization: 0.90
       max_num_batched_tokens: 16384
       max_num_seqs: 16
-      # Breakable graph replay currently strands the PCP/DCP collective before
-      # the first DeepEP dispatch. Keep torch eager execution without setting
+      # DeepEP-HT dispatch/combine cannot be captured. Disable graphs without
       # --enforce-eager so DeepGEMM and the selected attention kernels remain.
       compilation_config: {cudagraph_mode: NONE}
       # Prefill never executes sparse decode; autotuning it at the full 32k
