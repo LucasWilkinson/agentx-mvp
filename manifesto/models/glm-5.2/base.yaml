@@ -1,8 +1,8 @@
-# Shared GLM-5.2 P/D base. Variants override roles/parallelism only.
+# Shared GLM-5.2 P/D wiring. Deployments own topology and capacity tuning.
 # The vLLM build comes from a vllm-envs (`ve`) env on the workspace PVC (VLLM_ENV in .env,
 # rendered as --vllm-env); model.image is only the CUDA toolchain image (override: VLLM_IMAGE).
-# Decode: TP1 x DP8 + EP behind the llm-d disagg routing sidecar. KV moves via NIXL.
-# No enforce_eager anywhere: CUDA graphs + torch.compile stay on (PCP variants only drop cudagraphs on prefill).
+# KV moves via NIXL. CUDA graphs and torch.compile remain enabled unless a
+# deployment explicitly changes them.
 topology: pd
 model:
   id: zai-org/GLM-5.2-FP8
@@ -23,9 +23,6 @@ runtime:
 vars:
   common_vllm: &common_vllm
     trust_remote_code: true
-    # 142k benchmark cap (aiperf MAX_CONTEXT_LENGTH in .env) + output. Not -1/auto: the profile run then sizes the
-    # sparse-attention indexer for 1M tokens and eats KV memory (PCP prefill auto-fit fell to 114k, 2026-08-25).
-    max_model_len: 163840   # the benchmark's ISL cap is aiperf's MAX_CONTEXT_LENGTH (.env)
     kv_cache_dtype: fp8
     moe_backend: deep_gemm
     safetensors_load_strategy: prefetch
@@ -33,17 +30,16 @@ vars:
     disable_uvicorn_access_log: true
 roles:
   - name: prefill
-    parallelism: {tp: 8, dp: 1, ep: false}
-    kv_transfer_config: {kv_connector: NixlConnector, kv_role: kv_producer, kv_connector_extra_config: {enforce_handshake_compat: false}}
+    # DP8 creates one NIXL/UCX agent per GPU. Keep each agent to one UCX
+    # progress thread so concurrent first handshakes do not exhaust Mellanox
+    # DevX/UAR resources (observed as ucp_ep_rkey_unpack segfaults at DP8).
+    kv_transfer_config: {kv_connector: NixlConnector, kv_role: kv_producer, kv_connector_extra_config: {enforce_handshake_compat: false, num_threads: 1}}
     vllm:
       <<: *common_vllm
-      max_num_batched_tokens: 8192
-      gpu_memory_utilization: "0.90"   # headroom for 8k-token graph capture; still ~5x 131k-token concurrency
   - name: decode
-    parallelism: {tp: 1, dp: 8, ep: true}
     routing_proxy: true
     dp_load_balancing: external
-    kv_transfer_config: {kv_connector: NixlConnector, kv_role: kv_consumer, kv_connector_extra_config: {enforce_handshake_compat: false}}
+    kv_transfer_config: {kv_connector: NixlConnector, kv_role: kv_consumer, kv_connector_extra_config: {enforce_handshake_compat: false, num_threads: 1}}
     # DeepEP low-latency needs NVSHMEM (IBGDA over the ibp* HCAs). QP depth = (max_num_batched_tokens + 1) * 2.
     env:
       NVSHMEM_REMOTE_TRANSPORT: ibgda
@@ -54,8 +50,4 @@ roles:
       NVSHMEM_QP_DEPTH: "130"
     vllm:
       <<: *common_vllm
-      # Decode-tuned like the reference runs: tiny per-rank batches, DeepEP low-latency dispatch.
-      gpu_memory_utilization: "0.95"
       all2all_backend: deepep_low_latency
-      max_num_batched_tokens: 64
-      max_num_seqs: 64

@@ -1,8 +1,0 @@
-# PCP8 x DCP8 prefill with 24k chunks (3072 tokens per PCP rank per step). 32k/64k OOM in the fused-MoE
-# workspace (sized by the global chunk since every EP rank can receive tokens from all PCP ranks).
-extends: p1-pcp8dcp8ep-d1-dp8ep.yaml
-release: glm52-p1-pcp8dcp8ep-d1-dp8ep-mnbt24k
-roles:
-  prefill:
-    vllm:
-      max_num_batched_tokens: 24576

@@ -25,7 +25,7 @@ Clone it next to this repo (`MANIFESTO_ROOT`, default `../llm-manifesto`).
 just bootstrap                          # once per namespace: hf-secret + pull secret on the default SA
 just router                             # once: llm-d router (Envoy + EPP) from deploy/router-values.yaml
 just deploy                             # MANIFESTO_SPEC from .env
-just deploy glm-5.2/p1-tp8ep-d1-dp8ep   # or any spec name
+just deploy glm-5.2/p1-pcp8dcp8ep-d1-dp8ep-dspark
 just render                             # show what would be applied
 just teardown                           # delete the current spec's model servers (--all for everything)
 ```
@@ -33,16 +33,9 @@ just teardown                           # delete the current spec's model server
 The router (Envoy + endpoint picker, P/D scheduling profile) is Helm-managed and selects any
 model server labelled `llm-d.ai/inferenceServing=true` owned by `MANIFESTO_USER`, so `URL`
 stays `http://<ROUTER_RELEASE>-epp:80` across specs. Manifesto's own Gateway/EPP objects are
-stripped from the render (`scripts/env.sh: render_model`). New variants are new files under
-`manifesto/models/glm-5.2/` that `extends: base.yaml`.
-
-Specs:
-
-| Spec | What it is |
-|---|---|
-| `glm-5.2/p1-tp8-d1-dp8ep` | Dev checkout (`pr8-cv2`): prefill TP8, decode DP8+EP |
-| `glm-5.2/p1-tp8ep-d1-dp8ep` | Same with EP on the prefill |
-| `glm-5.2/ref-p1w1-d1w1-mtp-offload` | The llm-d "142k + MTP + Offloading" reference config (MTP-3, NIXL + CPU KV offload, DeepEP) shrunk to 1 prefill + 1 decode pod; needs a `ve` env with DeepEP/NVSHMEM kernels |
+stripped from the render (`scripts/env.sh: render_model`). The active target is
+`glm-5.2/p1-pcp8dcp8ep-d1-dp8ep-dspark`; the catalog also retains the DP8
+correctness baseline and replicated-PCP fallback.
 
 The InferencePool lists target ports 8000-8007 so every DP rank of a decode pod is an
 endpoint. The EPP assumes every pod serves all of them unless told otherwise, so
@@ -76,7 +69,7 @@ VLLM_ENV=/workspace/envs/pcp-producers just sweep pcp-producers
 
 ```bash
 just sweep isl142k                                  # SWEEP_SPECS x SWEEP_CONCURRENCIES
-just sweep mtp glm-5.2/p1-tp8-d1-dp8ep              # explicit specs
+just sweep dspark glm-5.2/p1-pcp8dcp8ep-d1-dp8ep-dspark  # explicit spec
 just results && just dashboard isl142k              # results/isl142k/interactivity_vs_throughput.html
 ```
 
@@ -162,18 +155,15 @@ launch script activates `$MANIFESTO_VLLM_ENV/.venv`, and role `env` is layered a
 on the devbox with `VE_CACHE_DIR=/workspace/.cache/vllm-envs VE_ENVS_ROOT=/workspace/vdptest ve new <remote>/<branch> --name <name> --repo /workspace/vdptest/vllm-main`
 (the worktree must live on the workspace PVC so GPU pods can mount it).
 
-Branch-specific args belong in the same variant spec (see `manifesto/models/glm-5.2/p1-pcp8ep-d1-dp8ep-glm53.yaml`):
+Branch-specific args belong in the variant spec:
 `extends` deep-merges mappings but *replaces* lists, so restate `vllm_raw_args` to drop a parent flag, and use
 `key: $delete` to remove a mapping entry. `vllm_env.txt` in each sweep config dir records env, commit and branch
 per role.
 
-## PCP x DCP prefill (branch `nm/glm-53-blog/prefiller`)
+## PCP x DCP prefill
 
-`p1-pcp8dcp8ep-d1-dp8ep.yaml` runs the prefill as PCP8 x DCP8 x TP1 + EP: DCP spans the PCP group, so the KV cache is
-block-sharded across the 8 ranks (2.45M-token pool instead of 306k replicated) and every rank serves its shard to the
-DP8 (DCP1) decoder over NIXL. Both roles must run the branch env (`MANIFESTO_VLLM_ENV: /workspace/vdptest/glm53-prefiller`):
-the decoder needs vllm-project/vllm#50611's DCP-aware NIXL reads. Prefill-only probes: `prof-`/`bench-p1-pcp8ep-dcp8*.yaml`;
-`scripts/prefill-check.py` + `/tmp/compare-check.py` compare first-token top-5 logprobs against a replicated-KV baseline.
-Known cost: the sparse attention gathers queries across the PCP group and reduce-scatters merged outputs, so single-prompt
-prefill throughput is ~0.4x replicated PCP; the win is the 8x prefix-cache pool. Profiling (`prof-*`) wedges the API
-server after `/stop_profile` with large traces, so use `bench-*` specs for timing.
+`p1-pcp8dcp8ep-d1-dp8ep-dspark.yaml` runs PCP8 x TP1 x DCP8 + EP prefill and
+DP8 + EP decode. DCP spans the PCP group, block-shards the KV cache across all
+eight ranks, and publishes every shard to the decoder over NIXL. Both roles use
+`/workspace/vdptest/frankenstein-prefiller-lucas-dcp`, which contains the
+PCP-spanning DCP support on top of vllm-project/vllm#50611.

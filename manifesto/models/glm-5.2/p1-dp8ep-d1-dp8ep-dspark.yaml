@@ -1,34 +1,42 @@
-# Reference layout + DSpark speculative decoding (RedHatAI/GLM-5.2-speculator.dspark, 7 draft tokens,
-# adaptive verification) on both roles. Decode max_num_batched_tokens is raised from 64 to 512 because
-# each running sequence now needs 1 + 7 verify tokens per step (64 seqs x 8).
-extends: p1-dp8ep-d1-dp8ep.yaml
+# Correctness baseline: one NIXL producer per DP rank, matching DP8 decode.
+extends: base-frankenstein.yaml
 release: glm52-p1-dp8ep-d1-dp8ep-dspark
-vars:
-  dspark: &dspark
-    method: dspark
-    model: RedHatAI/GLM-5.2-speculator.dspark
-    num_speculative_tokens: 7
-    enable_adaptive_verification: true
-    # the drafter is a dense Qwen3-style model: it cannot use the target's fp8_ds_mla KV layout
-    kv_cache_dtype: fp8
 roles:
   prefill:
+    parallelism: {tp: 1, dp: 8, ep: true}
+    routing_proxy: true
+    dp_load_balancing: external
     env:
-      MANIFESTO_VLLM_ENV: /workspace/vdptest/glm53-prefiller   # newer main; vllm-main's DSpark asserts in the profile run
+      MANIFESTO_VLLM_ENV: /workspace/vdptest/glm53-prefiller
+      PYTHONPATH: /workspace/vdptest/glm53-prefiller
+      VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS: "0"
     vllm:
-      # the drafter emits 7 query tokens per request into buffers sized at max_num_batched_tokens (2048),
-      # so the default max_num_seqs (1024) overflowed them in the profile run: 256 x 7 = 1792 <= 2048
-      max_num_seqs: 256
-      # no adaptive verification here: MRV2 requires CUDA graphs for it and the offload
-      # connector forces cudagraph_mode=NONE on this role (the prefiller never verifies anyway)
+      max_model_len: 114688
+      gpu_memory_utilization: 0.90
+      max_num_batched_tokens: 2048
+      max_num_seqs: 16
+      enforce_eager: true
+      # The producer must instantiate DSpark too: NIXL registers every KV-cache
+      # region, including the draft cache, and requires the producer/consumer
+      # region sets to match during handshake.
       speculative_config:
         method: dspark
         model: RedHatAI/GLM-5.2-speculator.dspark
         num_speculative_tokens: 7
+        draft_sample_method: probabilistic
         kv_cache_dtype: fp8
+      kernel_config:
+        enable_flashinfer_autotune: false
   decode:
+    parallelism: {tp: 1, dp: 8, ep: true}
     env:
       MANIFESTO_VLLM_ENV: /workspace/vdptest/glm53-prefiller
+      PYTHONPATH: /workspace/vdptest/glm53-prefiller
+      VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS: "0"
     vllm:
-      speculative_config: *dspark
+      max_model_len: 114688
+      # 0.940 leaves exactly 256 MiB and the final DeepGEMM warmup allocation
+      # fails; 0.938 frees ~286 MiB while retaining >114688 KV tokens.
+      gpu_memory_utilization: 0.938
       max_num_batched_tokens: 512
+      max_num_seqs: 64

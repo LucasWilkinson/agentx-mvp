@@ -1,27 +1,54 @@
-# PCP8 x DCP8 prefill (8k chunks) + DP8 decode with DSpark on both roles. The prefiller only drafts
-# (kv producer, never verifies); the drafter runs replicated over the global batch on every PCP rank.
-extends: p1-pcp8dcp8ep-d1-dp8ep-mnbt8k.yaml
+# Current deployment: FP8 PCP8 x TP1 x DCP8 + EP prefill, and FP8 DP8 + EP
+# decode with DSpark. The producer also instantiates the draft KV cache so its
+# NIXL region set exactly matches the consumer's during direct transfer.
+extends: base-frankenstein.yaml
 release: glm52-p1-pcp8dcp8ep-d1-dp8ep-dspark
-vars:
-  dspark: &dspark
-    method: dspark
-    model: RedHatAI/GLM-5.2-speculator.dspark
-    num_speculative_tokens: 7
-    enable_adaptive_verification: true
-    # the drafter is a dense Qwen3-style model: it cannot use the target's fp8_ds_mla KV layout
-    kv_cache_dtype: fp8
 roles:
   prefill:
+    parallelism: {gpus: 8, tp: 1, pcp: 8, dcp: 8, dp: 1, ep: true}
+    env:
+      MANIFESTO_VLLM_ENV: /workspace/vdptest/frankenstein-prefiller-lucas-dcp
+      PYTHONPATH: /workspace/vdptest/frankenstein-prefiller-lucas-dcp
+      VLLM_USE_PCP_DIRECT_KV: "1"
+      VLLM_USE_DIRECT_DCP_KV_GATHER: "0"
+      # Breakable capture ends segments while DeepEP-HT still has auxiliary-
+      # stream work in flight. Standard PIECEWISE capture keeps the complete
+      # MoE operation (dispatch, experts, combine) as one eager island.
+      VLLM_USE_BREAKABLE_CUDAGRAPH: "0"
+      VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS: "0"
     vllm:
-      # drafter query buffers are sized at max_num_batched_tokens (8192): max_num_seqs x 7 must fit
-      max_num_seqs: 256
-      # no adaptive verification here: MRV2 requires CUDA graphs for it and sparse-MLA PCP forbids them
+      # Null omits --max-model-len and uses the checkpoint default.
+      max_model_len: null
+      # FlashMLA sparse DCP is validated only with the all-gather/reduce-scatter path.
+      dcp_comm_backend: ag_rs
+      # DSpark's producer-side draft cache is required for NIXL region
+      # compatibility. Standard PIECEWISE profiling leaves 8.98 GiB for KV at
+      # 0.93, while DCP8 needs 9.58 GiB for the checkpoint's 1,048,576-token
+      # default context. 0.94 adds 1.40 GiB of budget and retains graph headroom.
+      gpu_memory_utilization: 0.94
+      max_num_batched_tokens: 32768
+      max_num_seqs: 16
       speculative_config:
         method: dspark
         model: RedHatAI/GLM-5.2-speculator.dspark
         num_speculative_tokens: 7
+        draft_sample_method: probabilistic
         kv_cache_dtype: fp8
+      # Prefill never executes sparse decode; autotuning it at the full 32k
+      # scheduler shape otherwise allocates an unnecessary 8 GiB temporary.
+      kernel_config:
+        enable_flashinfer_autotune: false
+        linear_backend: deep_gemm
   decode:
+    parallelism: {tp: 1, dp: 8, ep: true}
+    env:
+      MANIFESTO_VLLM_ENV: /workspace/vdptest/frankenstein-prefiller-lucas-dcp
+      PYTHONPATH: /workspace/vdptest/frankenstein-prefiller-lucas-dcp
+      # Avoid a duplicate graph capture that trips PyTorch's pinned-host
+      # allocator; 0.94 without estimation matches ~0.985 with its 4.45 GiB reserve.
+      VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS: "0"
     vllm:
-      speculative_config: *dspark
+      max_model_len: 114688
+      gpu_memory_utilization: 0.94
       max_num_batched_tokens: 512
+      max_num_seqs: 64

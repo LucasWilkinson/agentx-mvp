@@ -1,8 +1,0 @@
-# bench-p1-pcp8ep-dcp8 with NCCL forced to the Simple protocol: the DCP token-gather all-gathers
-# (~150 MB) and reduce-scatters (~270 MB) per layer-step showed up as RING_LL kernels in traces.
-extends: bench-p1-pcp8ep-dcp8.yaml
-release: glm52-bench-p1-pcp8ep-dcp8-simple
-roles:
-  prefill:
-    env:
-      NCCL_PROTO: Simple

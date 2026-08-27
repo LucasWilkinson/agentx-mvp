@@ -1,8 +1,0 @@
-# PCP8 x DCP8 prefill with 8k chunks (1024 tokens per PCP rank per step). With the KV sharded 8-way the
-# per-rank KV need at 163840 is small, so the larger chunk fits where replicated PCP could not go past 8k.
-extends: p1-pcp8dcp8ep-d1-dp8ep.yaml
-release: glm52-p1-pcp8dcp8ep-d1-dp8ep-mnbt8k
-roles:
-  prefill:
-    vllm:
-      max_num_batched_tokens: 8192

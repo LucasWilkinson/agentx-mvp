@@ -1,8 +1,0 @@
-# Reference layout with a 4x larger prefill chunk (8192 instead of the reference's 2048). TP1 ranks hold
-# unsharded activations, so this is near the memory ceiling for DP8 prefill on one 8xH200 node.
-extends: p1-dp8ep-d1-dp8ep.yaml
-release: glm52-p1-dp8ep-d1-dp8ep-mnbt8k
-roles:
-  prefill:
-    vllm:
-      max_num_batched_tokens: 8192
