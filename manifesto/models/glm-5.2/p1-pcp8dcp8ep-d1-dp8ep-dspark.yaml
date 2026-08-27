@@ -1,6 +1,6 @@
 # Current deployment: FP8 PCP8 x TP1 x DCP8 + EP prefill, and FP8 DP8 + EP
-# decode with DSpark. The producer also instantiates the draft KV cache so its
-# NIXL region set exactly matches the consumer's during direct transfer.
+# decode with DSpark. The producer transfers target-model KV only; speculative
+# draft KV is decoder-local.
 extends: base-frankenstein.yaml
 release: glm52-p1-pcp8dcp8ep-d1-dp8ep-dspark
 roles:
@@ -25,9 +25,8 @@ roles:
       # cudagraph-safe ElasticBuffer path while retaining FP8 dispatch.
       all2all_backend: deepep_v2
       dcp_comm_backend: ag_rs
-      # DSpark's producer-side draft cache is required for NIXL region
-      # compatibility. DCP8 needs 9.58 GiB for the checkpoint's 1,048,576-token
-      # default context; DeepEP v2 leaves 7.83 GiB at 0.935, so reserve 0.95.
+      # DCP8 needs 9.58 GiB for the checkpoint's 1,048,576-token default
+      # context; DeepEP v2 leaves 7.83 GiB at 0.935, so reserve 0.95.
       gpu_memory_utilization: 0.95
       max_num_batched_tokens: 16384
       max_num_seqs: 16
@@ -35,12 +34,6 @@ roles:
       # the first DeepEP dispatch. Keep torch eager execution without setting
       # --enforce-eager so DeepGEMM and the selected attention kernels remain.
       compilation_config: {cudagraph_mode: NONE}
-      speculative_config:
-        method: dspark
-        model: RedHatAI/GLM-5.2-speculator.dspark
-        num_speculative_tokens: 7
-        draft_sample_method: probabilistic
-        kv_cache_dtype: fp8
       # Prefill never executes sparse decode; autotuning it at the full 32k
       # scheduler shape otherwise allocates an unnecessary 8 GiB temporary.
       kernel_config:
