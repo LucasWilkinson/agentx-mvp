@@ -25,10 +25,8 @@ roles:
       dcp_comm_backend: ag_rs
       # DSpark's producer-side draft cache is required for NIXL region
       # compatibility. DCP8 needs 9.58 GiB for the checkpoint's 1,048,576-token
-      # default context. Breakable capture at 0.94 leaves only 2.58 GiB free
-      # before DeepGEMM requests a 3.05 GiB warmup output; 0.935 restores
-      # roughly 0.70 GiB of physical headroom while retaining >9.58 GiB KV.
-      gpu_memory_utilization: 0.935
+      # default context; DeepEP v2 leaves 7.83 GiB at 0.935, so reserve 0.95.
+      gpu_memory_utilization: 0.95
       max_num_batched_tokens: 32768
       max_num_seqs: 16
       speculative_config:
