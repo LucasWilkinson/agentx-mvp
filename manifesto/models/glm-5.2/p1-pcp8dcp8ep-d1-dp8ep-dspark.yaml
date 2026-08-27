@@ -18,6 +18,9 @@ roles:
     vllm:
       # Null omits --max-model-len and uses the checkpoint default.
       max_model_len: null
+      # DeepEP HT is not CUDA-graph compatible. DeepEP v2 uses its
+      # cudagraph-safe ElasticBuffer path while retaining FP8 dispatch.
+      all2all_backend: deepep_v2
       # FlashMLA sparse DCP is validated only with the all-gather/reduce-scatter path.
       dcp_comm_backend: ag_rs
       # DSpark's producer-side draft cache is required for NIXL region
