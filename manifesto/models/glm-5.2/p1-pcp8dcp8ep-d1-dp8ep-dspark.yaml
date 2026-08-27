@@ -11,10 +11,9 @@ roles:
       PYTHONPATH: /workspace/vdptest/frankenstein-prefiller-lucas-dcp
       VLLM_USE_PCP_DIRECT_KV: "1"
       VLLM_USE_DIRECT_DCP_KV_GATHER: "0"
-      # Breakable capture ends segments while DeepEP-HT still has auxiliary-
-      # stream work in flight. Standard PIECEWISE capture keeps the complete
-      # MoE operation (dispatch, experts, combine) as one eager island.
-      VLLM_USE_BREAKABLE_CUDAGRAPH: "0"
+      # Use the non-torch.compile capture path. Operations decorated with
+      # eager_break_during_capture execute between breakable graph segments.
+      VLLM_USE_BREAKABLE_CUDAGRAPH: "1"
       VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS: "0"
     vllm:
       # Null omits --max-model-len and uses the checkpoint default.
