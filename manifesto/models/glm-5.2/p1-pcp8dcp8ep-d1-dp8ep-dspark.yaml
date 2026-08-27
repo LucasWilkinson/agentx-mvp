@@ -21,8 +21,6 @@ roles:
       # DeepEP HT is not CUDA-graph compatible. DeepEP v2 uses its
       # cudagraph-safe ElasticBuffer path while retaining FP8 dispatch.
       all2all_backend: deepep_v2
-      # FlashMLA sparse DCP is validated only with the all-gather/reduce-scatter path.
-      dcp_comm_backend: ag_rs
       # DSpark's producer-side draft cache is required for NIXL region
       # compatibility. DCP8 needs 9.58 GiB for the checkpoint's 1,048,576-token
       # default context; DeepEP v2 leaves 7.83 GiB at 0.935, so reserve 0.95.
