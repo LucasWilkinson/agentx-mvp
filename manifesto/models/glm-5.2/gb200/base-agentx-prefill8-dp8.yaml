@@ -1,0 +1,43 @@
+# Shared GB200 AgentX settings for the cross-node PCP8/DCP8/EP8 versus
+# TP8/EP8 prefiller comparison. Each role spans two four-GPU GB200 nodes;
+# concrete specs change only the prefill topology.
+extends: base-frankenstein.yaml
+roles:
+  prefill:
+    lws: {size: 2, same_topology_key: nvidia.com/gpu.clique}
+    fabric_profile: nvlink
+    resources: {cpu: 32, memory: 512Gi, gpus: 4}
+    env:
+      VLLM_SERVER_DEV_MODE: "1"
+      VLLM_USE_NCCL_SYMM_MEM: "0"
+      VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS: "1800"
+    vllm:
+      max_model_len: 142000
+      gpu_memory_utilization: 0.905
+      max_num_batched_tokens: 16384
+      max_num_seqs: 16
+      enable_prefix_caching: true
+      moe_backend: deep_gemm
+      all2all_backend: flashinfer_nvlink_one_sided
+      compilation_config: {cudagraph_mode: NONE}
+      kernel_config:
+        enable_flashinfer_autotune: false
+        linear_backend: deep_gemm
+  decode:
+    lws: {size: 2, same_topology_key: nvidia.com/gpu.clique}
+    fabric_profile: nvlink
+    parallelism: {gpus: 4, tp: 1, dp: 8, ep: true}
+    resources: {cpu: 32, memory: 512Gi, gpus: 4}
+    env:
+      VLLM_SERVER_DEV_MODE: "1"
+      NVSHMEM_QP_DEPTH: $delete
+    vllm:
+      max_model_len: 142000
+      gpu_memory_utilization: 0.96
+      max_num_batched_tokens: 512
+      max_num_seqs: 64
+      enable_prefix_caching: true
+      moe_backend: deep_gemm
+      all2all_backend: flashinfer_nvlink_one_sided
+      compilation_config: {cudagraph_mode: NONE}
+      kernel_config: {enable_flashinfer_autotune: false}

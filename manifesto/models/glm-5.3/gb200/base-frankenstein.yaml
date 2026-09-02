@@ -1,0 +1,58 @@
+# GLM-5.3 specialization for the OCI GB200 NVLink compute domain.
+# Reuse the proven P/D wiring and GB200 storage/platform integration, while
+# replacing GLM-5.2's DSpark and legacy DeepEP choices with GLM-5.3 MTP and
+# Blackwell's FlashInfer TRTLLM FP8 MoE kernel over one-sided MNNVL. Dense
+# linear layers remain on DeepGEMM; no DeepEP/DeepEPv2 runtime is involved.
+extends: ../../glm-5.2/gb200/base-frankenstein.yaml
+model:
+  id: zai-org/GLM-5.3
+  label: GLM-5.3
+  served_name: glm-agentx
+runtime:
+  # One centrally pinned build is used by both P/D roles and all three arms.
+  vllm_env: /mnt/lustre/lwilkinson/vdptest/frankenstein-dcp-token-a2a
+  pre_launch:
+    - |-
+      actual=$(git -C "$MANIFESTO_VLLM_ENV" rev-parse HEAD)
+      if [ "$actual" != "$EXPECTED_VLLM_COMMIT" ]; then
+        echo "Expected vLLM $EXPECTED_VLLM_COMMIT, found $actual" >&2
+        exit 1
+      fi
+  env:
+    EXPECTED_VLLM_COMMIT: 994b0adfa183ad4aca78cf91e89863909b6238cf
+roles:
+  prefill:
+    fabric_profile: nvlink
+    vllm:
+      revision: 30333038ada1f1dacb294a93270305a890b50c14
+      tokenizer_revision: 30333038ada1f1dacb294a93270305a890b50c14
+      # The PCP x DCP token-sharded kernel is implemented by FlashMLA sparse
+      # and consumes its packed DeepSeek-MLA FP8 cache layout.
+      kv_cache_dtype: fp8_ds_mla
+      moe_backend: flashinfer_trtllm
+      all2all_backend: flashinfer_nvlink_one_sided
+      enable_auto_tool_choice: true
+      tool_call_parser: glm47
+      reasoning_parser: glm45
+      speculative_config:
+        method: mtp
+        num_speculative_tokens: 3
+  decode:
+    fabric_profile: nvlink
+    env:
+      NVSHMEM_QP_DEPTH: $delete
+    vllm:
+      revision: 30333038ada1f1dacb294a93270305a890b50c14
+      tokenizer_revision: 30333038ada1f1dacb294a93270305a890b50c14
+      kv_cache_dtype: fp8_ds_mla
+      moe_backend: flashinfer_trtllm
+      all2all_backend: flashinfer_nvlink_one_sided
+      enable_auto_tool_choice: true
+      tool_call_parser: glm47
+      reasoning_parser: glm45
+      speculative_config:
+        method: mtp
+        model: $delete
+        num_speculative_tokens: 3
+        draft_sample_method: $delete
+        kv_cache_dtype: $delete

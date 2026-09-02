@@ -5,7 +5,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/env.sh; load_agentx_env; require_agentx_env KUBE_CONTEXT NAMESPACE URL MODEL
-out_dir="${1:-results/accuracy/$(date +%Y%m%dT%H%M%SZ)}"; mkdir -p "$out_dir"
+out_dir="${1:-results/.artifacts/accuracy/$(date +%Y%m%dT%H%M%SZ)}"; mkdir -p "$out_dir"
 tasks="${ACCURACY_TASKS:-gsm8k}"; limit="${ACCURACY_LIMIT:-200}"; conc="${ACCURACY_CONCURRENCY:-4}"
 devbox_env="${ACCURACY_DEVBOX_ENV:-/workspace/vdptest/glm53-prefiller}"
 remote_dir="/tmp/accuracy-$$"

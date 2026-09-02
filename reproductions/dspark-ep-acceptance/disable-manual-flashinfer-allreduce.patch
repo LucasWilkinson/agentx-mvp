@@ -1,0 +1,20 @@
+diff --git a/vllm/model_executor/layers/fused_allreduce_gemma_rms_norm.py b/vllm/model_executor/layers/fused_allreduce_gemma_rms_norm.py
+index d2639871e..a4bb6b30f 100644
+--- a/vllm/model_executor/layers/fused_allreduce_gemma_rms_norm.py
++++ b/vllm/model_executor/layers/fused_allreduce_gemma_rms_norm.py
+@@ -14,6 +14,7 @@ identical to the unfused model path.
+ 
+ import torch
+ 
++import vllm.envs as envs
+ from vllm.distributed.communication_op import tensor_model_parallel_all_reduce
+ from vllm.distributed.parallel_state import (
+     get_tensor_model_parallel_rank,
+@@ -66,6 +67,7 @@ def _can_use_flashinfer(hidden_states: torch.Tensor, tp_size: int) -> tuple[bool,
+     """Whether the flashinfer fused path applies; returns (ok, max_token_num)."""
+     if (
+         flashinfer_trtllm_fused_allreduce_norm is None
++        or not envs.VLLM_ALLREDUCE_USE_FLASHINFER
+         or get_fi_ar_workspace is None
+         or _AR_RESIDUAL_RMS_NORM is None
+     ):

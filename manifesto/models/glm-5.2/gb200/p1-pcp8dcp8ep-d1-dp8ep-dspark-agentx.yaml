@@ -1,0 +1,58 @@
+# GB200 P/D comparison arm: PCP8 + DCP8 + EP8 prefiller across two four-GPU
+# nodes, with a fixed two-node DP8 + EP8 DSpark decoder.
+extends: base-agentx-prefill8-dp8.yaml
+release: glm52-gb200-pcp8-dp8
+roles:
+  prefill:
+    parallelism: {gpus: 4, tp: 1, pcp: 8, dcp: 8, dp: 1, ep: true}
+    env:
+      # The direct-KV fast path is host-local only in f711. Use the regular
+      # PCP KV path for this two-node topology (and retain prefix caching).
+      VLLM_USE_PCP_DIRECT_KV: "0"
+      VLLM_USE_DIRECT_DCP_KV_GATHER: "0"
+    # f711ee1 includes PCP in ParallelConfig.world_size, but its multi-node
+    # CLI validation still computes nnodes from TP alone. Patch a pod-local
+    # source overlay only; the shared ve worktree remains untouched. Newer
+    # clean ve environments already contain this fix and do not use this spec.
+    pre_launch:
+      - |-
+        CROSS_NODE_PCP_OVERLAY=/tmp/vllm-cross-node-pcp
+        rm -rf -- "$CROSS_NODE_PCP_OVERLAY"
+        mkdir -p "$CROSS_NODE_PCP_OVERLAY"
+        cp -a "${MANIFESTO_VLLM_ENV}/vllm" "$CROSS_NODE_PCP_OVERLAY/vllm"
+        python - "$CROSS_NODE_PCP_OVERLAY/vllm/engine/arg_utils.py" <<'PY'
+        from pathlib import Path
+        import sys
+
+        path = Path(sys.argv[1])
+        text = path.read_text()
+        edits = (
+            (
+                "                * self.tensor_parallel_size\n"
+                "            )\n"
+                "            world_size_within_dp = (\n"
+                "                self.pipeline_parallel_size "
+                "* self.tensor_parallel_size\n"
+                "            )\n",
+                "                * self.tensor_parallel_size\n"
+                "                * self.prefill_context_parallel_size\n"
+                "            )\n"
+                "            world_size_within_dp = (\n"
+                "                self.pipeline_parallel_size\n"
+                "                * self.tensor_parallel_size\n"
+                "                * self.prefill_context_parallel_size\n"
+                "            )\n",
+            ),
+        )
+        for old, new in edits:
+            if text.count(old) != 1:
+                raise RuntimeError(
+                    f"Expected one cross-node PCP patch site in {path}, "
+                    f"found {text.count(old)}"
+                )
+            text = text.replace(old, new)
+        path.write_text(text)
+        PY
+        export PYTHONPATH="$CROSS_NODE_PCP_OVERLAY:${PYTHONPATH:-}"
+    vllm:
+      dcp_comm_backend: ag_rs

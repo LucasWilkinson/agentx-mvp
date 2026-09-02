@@ -1,0 +1,29 @@
+# H200 replicated-PCP fallback while overlapping PCP8 x DCP8 is fixed.
+extends: base-frankenstein.yaml
+release: glm52-p1-pcp8ep-d1-dp8ep-dspark-h200
+roles:
+  prefill:
+    parallelism: {gpus: 8, tp: 1, pcp: 8, dp: 1, ep: true}
+    env:
+      MANIFESTO_VLLM_ENV: /workspace/vdptest/frankenstein-prefiller-lucas-dcp
+      PYTHONPATH: /workspace/vdptest/frankenstein-prefiller-lucas-dcp
+      VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS: "0"
+    vllm:
+      max_model_len: 114688
+      gpu_memory_utilization: 0.90
+      max_num_batched_tokens: 32768
+      max_num_seqs: 16
+      enforce_eager: true
+      kernel_config:
+        enable_flashinfer_autotune: false
+  decode:
+    parallelism: {tp: 1, dp: 8, ep: true}
+    env:
+      MANIFESTO_VLLM_ENV: /workspace/vdptest/frankenstein-prefiller-lucas-dcp
+      PYTHONPATH: /workspace/vdptest/frankenstein-prefiller-lucas-dcp
+      VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS: "0"
+    vllm:
+      max_model_len: 114688
+      gpu_memory_utilization: 0.94
+      max_num_batched_tokens: 512
+      max_num_seqs: 64

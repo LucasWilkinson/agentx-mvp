@@ -1,0 +1,37 @@
+# Shared B200 comparison settings. Each role occupies one complete 8xB200 node.
+extends: base-frankenstein.yaml
+roles:
+  prefill:
+    resources: {cpu: 192, memory: 2200Gi, gpus: 8, ephemeral_storage: 500Gi}
+    env:
+      # Avoid the throwaway graph capture followed by a second real capture;
+      # PyTorch 2.13 otherwise trips CUDACachingAllocator pool use_count.
+      # This does not disable the real CUDA graphs.
+      VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS: "0"
+    vllm:
+      max_model_len: 142000
+      gpu_memory_utilization: 0.92
+      max_num_batched_tokens: 32768
+      max_num_seqs: 256
+      enable_prefix_caching: true
+      # Match the tested GB200 topology: experimental prefilling is eager;
+      # the shared decoder below retains vLLM's default CUDA graphs.
+      compilation_config: {cudagraph_mode: NONE}
+      kernel_config:
+        enable_flashinfer_autotune: false
+        linear_backend: deep_gemm
+  decode:
+    parallelism: {gpus: 8, tp: 1, dp: 8, ep: true}
+    resources: {cpu: 192, memory: 2200Gi, gpus: 8, ephemeral_storage: 500Gi}
+    env:
+      VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS: "0"
+    vllm:
+      max_model_len: 142000
+      gpu_memory_utilization: 0.92
+      max_num_batched_tokens: 512
+      max_num_seqs: 64
+      enable_prefix_caching: true
+      compilation_config: $delete
+      kernel_config:
+        enable_flashinfer_autotune: false
+        linear_backend: deep_gemm

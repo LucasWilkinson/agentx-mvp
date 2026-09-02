@@ -36,7 +36,11 @@ teardown spec="":
 benchmark:
     scripts/direct-run.sh
 
-# Deploy each spec in turn and benchmark every SWEEP_CONCURRENCIES; results under <RESULTS_PREFIX>/<name>/.
+# Run the pinned LMSYS OpenHands Pareto workload (parallel 1,2,4,8).
+lmsys run_name="lmsys-openhands":
+    RUN_NAME={{run_name}} scripts/lmsys-run.sh
+
+# Deploy each spec in turn; BENCHMARK_WORKLOAD selects agentx (default) or lmsys.
 sweep name +specs="":
     scripts/sweep.sh {{name}} {{specs}}
 
@@ -60,17 +64,29 @@ accuracy out="":
 status:
     scripts/status.sh
 
+# Open the GB200 kubeconfig SOCKS proxy. This never changes the active kube context.
+gb200-tunnel:
+    scripts/gb200-tunnel.sh
+
+# Show GB200 nodes, GPU requests, and vllm pods using --context default explicitly.
+gb200-status:
+    scripts/gb200-status.sh
+
+# Manage the zero-GPU arm64/CUDA 13 devbox used to build GB200 ve environments.
+gb200-devbox action="status":
+    scripts/gb200-devbox.sh {{action}}
+
 # Follow the newest benchmark Job.
 logs:
     scripts/logs.sh
 
-# Download AgentX artifacts from the PVC into results/.
+# Download AgentX artifacts from the PVC into results/.artifacts/downloads/.
 results:
     scripts/download-results.sh
 
 # Build interactivity-vs-throughput HTML for a downloaded sweep: just dashboard <sweep-name>
 dashboard sweep: results grafana-export
-    python3 scripts/build-dashboard.py results/{{sweep}}
+    python3 scripts/build-dashboard.py results/.artifacts/sweeps/{{sweep}}
 
 # Export the matching Grafana time window beside each downloaded run.
 grafana-export:

@@ -1,0 +1,33 @@
+# CoreWeave H200: PCP8 x DCP8 + EP prefill and DP8 + EP DSpark decode.
+extends: base-frankenstein.yaml
+release: glm52-p1-pcp8dcp8ep-d1-dp8ep-dspark-h200
+roles:
+  prefill:
+    parallelism: {gpus: 8, tp: 1, pcp: 8, dcp: 8, dp: 1, ep: true}
+    env:
+      MANIFESTO_VLLM_ENV: /workspace/vdptest/frankenstein-prefiller-lucas-dcp
+      PYTHONPATH: /workspace/vdptest/frankenstein-prefiller-lucas-dcp
+      VLLM_USE_PCP_DIRECT_KV: "1"
+      VLLM_USE_DIRECT_DCP_KV_GATHER: "0"
+    vllm:
+      max_model_len: null
+      all2all_backend: deepep_high_throughput
+      dcp_comm_backend: ag_rs
+      gpu_memory_utilization: 0.90
+      max_num_batched_tokens: 16384
+      max_num_seqs: 16
+      compilation_config: {cudagraph_mode: NONE}
+      kernel_config:
+        enable_flashinfer_autotune: false
+        linear_backend: deep_gemm
+  decode:
+    parallelism: {tp: 1, dp: 8, ep: true}
+    env:
+      MANIFESTO_VLLM_ENV: /workspace/vdptest/frankenstein-prefiller-lucas-dcp
+      PYTHONPATH: /workspace/vdptest/frankenstein-prefiller-lucas-dcp
+      VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS: "0"
+    vllm:
+      max_model_len: 114688
+      gpu_memory_utilization: 0.94
+      max_num_batched_tokens: 512
+      max_num_seqs: 64

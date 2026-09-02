@@ -1,0 +1,31 @@
+# OCI GB200 specialization. Do not reuse this for discrete B200 systems:
+# Grace arm64, the NVLink compute domain, and MNNVL are GB200-specific.
+extends: ../base-frankenstein.yaml
+accelerator: gb200
+model:
+  image: vllm/vllm-openai:nightly
+runtime:
+  env:
+    VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS: "0"
+roles:
+  prefill:
+    lws: {size: 2, same_topology_key: nvidia.com/gpu.clique}
+    fabric_profile: deepep_prefill
+    env:
+      NVSHMEM_REMOTE_TRANSPORT: $delete
+      NVSHMEM_IB_ENABLE_IBGDA: $delete
+      NVSHMEM_HCA_PREFIX: $delete
+      NVSHMEM_BOOTSTRAP_UID_SOCK_IFNAME: $delete
+      NVIDIA_GDRCOPY: $delete
+  decode:
+    lws: {size: 2, same_topology_key: nvidia.com/gpu.clique}
+    fabric_profile: deepep_decode
+    env:
+      NVSHMEM_REMOTE_TRANSPORT: $delete
+      NVSHMEM_IB_ENABLE_IBGDA: $delete
+      NVSHMEM_HCA_PREFIX: $delete
+      NVSHMEM_BOOTSTRAP_UID_SOCK_IFNAME: $delete
+      NVIDIA_GDRCOPY: $delete
+      # DeepEP requires (max_num_batched_tokens + 1) * 2. The GB200 decode
+      # profile uses 512 scheduled tokens.
+      NVSHMEM_QP_DEPTH: "1026"

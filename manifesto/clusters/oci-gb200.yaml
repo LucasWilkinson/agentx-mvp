@@ -1,0 +1,95 @@
+# OCI NVIDIA AI-Accelerator GB200 cluster (4 GPUs/node, NVLink compute domain).
+# Live inventory verified 2026-08-27. Paths use {user} from --user.
+name: oci-gb200
+gpus_per_node: 4
+naming:
+  # The vllm namespace is shared by multiple users.
+  user_prefix: true
+accelerators:
+  default: gb200
+  profiles:
+    gb200:
+      resource_name: nvidia.com/gpu
+      presence_label: nvidia.com/gpu.present
+      node_selector: {nvidia.com/gpu.product: NVIDIA-GB200}
+      gpu_arch: gb200
+      torch_cuda_arch_list: "10.0+PTX"
+storage:
+  shared_volume:
+    persistentVolumeClaim:
+      claimName: lustre-pvc-vllm
+  shared_mount_path: /mnt/lustre
+  # Manifesto mounts this host path at /mnt/local in the container.
+  local_nvme_path: /mnt/numa0
+paths:
+  user_root: /mnt/lustre/{user}
+  cache_root: /mnt/lustre/{user}/jit-cache/{gpu_arch}/{cuda}/{cache_key}/{release}
+logging:
+  pvc: lustre-pvc-vllm
+  mount_path: /mnt/lustre
+  root: /mnt/lustre/{user}/logs
+pod_defaults:
+  shm_size: 2Gi
+  # IMEX NodePrepareResources consistently times out on this host. Exclude it
+  # until the cluster-side DRA issue is repaired.
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: NotIn
+                values: [10.0.135.174]
+fabric:
+  ucx_net_devices: mlx5_0:1,mlx5_1:1,mlx5_3:1,mlx5_4:1
+  imex_resource_claim_template: llm-d-dev-claim
+  default_profile: standard
+  expert_parallel_profiles:
+    decode: deepep_decode
+    prefill: deepep_prefill
+  default_env:
+    TRITON_LIBCUDA_PATH: /usr/lib64
+    VLLM_ENGINE_READY_TIMEOUT_S: "1800"
+    # The base image registers HPC-X's UCX-backed NCCL plugin globally. NIXL
+    # ships its own UCX build, and loading both into one process interposes
+    # incompatible UCX symbols. These roles are single-node, so use NCCL's
+    # built-in Socket net and request a deliberately absent external plugin.
+    NCCL_NET: Socket
+    NCCL_NET_PLUGIN: none
+    UCX_MEMTYPE_CACHE: "n"
+    UCX_NET_DEVICES: "{ucx_net_devices}"
+    UCX_TLS: rc,cuda_copy
+  profiles:
+    standard: {}
+    # FlashInfer's one-sided MoE all-to-all uses the GB200 NVLink compute
+    # domain directly. Keep the NCCL collectives on MNNVL too, without
+    # enabling any DeepEP/NVSHMEM-specific behavior.
+    nvlink:
+      env:
+        VLLM_USE_NCCL_SYMM_MEM: "0"
+        NCCL_CUMEM_ENABLE: "1"
+        NCCL_MNNVL_ENABLE: "1"
+        NCCL_NVLS_ENABLE: "1"
+    deepep_decode:
+      env:
+        VLLM_USE_NCCL_SYMM_MEM: "1"
+        NCCL_CUMEM_ENABLE: "1"
+        NCCL_MNNVL_ENABLE: "1"
+        NVSHMEM_DISABLE_CUDA_VMM: "0"
+        NCCL_NVLS_ENABLE: "1"
+        NVSHMEM_CUMEM_HANDLE_TYPE: FABRIC
+        VLLM_DEEPEP_LOW_LATENCY_USE_MNNVL: "1"
+        VLLM_DEEPEP_BUFFER_SIZE_MB: "0"
+    deepep_prefill:
+      env:
+        VLLM_USE_NCCL_SYMM_MEM: "1"
+        NCCL_CUMEM_ENABLE: "1"
+        NCCL_MNNVL_ENABLE: "1"
+        NVSHMEM_DISABLE_CUDA_VMM: "0"
+        NCCL_NVLS_ENABLE: "0"
+        VLLM_DEEPEP_HIGH_THROUGHPUT_FORCE_INTRA_NODE: "1"
+        VLLM_USE_DEEP_GEMM: "1"
+llm_d:
+  release: v0.9.0
+  images:
+    routing_sidecar: ghcr.io/llm-d/llm-d-router-disagg-sidecar:{release}

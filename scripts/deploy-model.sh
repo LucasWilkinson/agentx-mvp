@@ -8,9 +8,10 @@ selector="$(instance_selector "$spec")"
 instance="${selector#app.kubernetes.io/instance=}"
 instance="${instance%%,*}"
 
-other="$(k get pods -l 'llm-d.ai/inferenceServing=true' -o jsonpath='{.items[*].metadata.labels.app\.kubernetes\.io/instance}' | tr ' ' '\n' | sort -u | grep -v "^${instance}$" || true)"
+owner_selector="llm-d.ai/inferenceServing=true,llm-d.ai/owner=${MANIFESTO_USER}"
+other="$(k get pods -l "$owner_selector" -o jsonpath='{.items[*].metadata.labels.app\.kubernetes\.io/instance}' | tr ' ' '\n' | sort -u | grep -v "^${instance}$" || true)"
 if [[ -n "$other" ]]; then
-  echo "ERROR: other model servers are running (instance: $other). Run 'just teardown' first." >&2
+  echo "ERROR: another ${MANIFESTO_USER} model server is running (instance: $other). Run 'just teardown' first." >&2
   exit 1
 fi
 
@@ -38,6 +39,12 @@ echo "Waiting for the router to serve $MODEL..."
 port="${ROUTER_PROBE_PORT:-33080}"
 k port-forward "service/${ROUTER_RELEASE}-epp" "${port}:80" >/dev/null 2>&1 &
 pf=$!; trap 'kill $pf 2>/dev/null || true' EXIT
+sleep 1
+if ! kill -0 "$pf" 2>/dev/null; then
+  echo "ERROR: could not open router probe port ${port}; set ROUTER_PROBE_PORT to an unused local port" >&2
+  wait "$pf" 2>/dev/null || true
+  exit 1
+fi
 deadline=$(( $(date +%s) + ${MODEL_READY_TIMEOUT_SECONDS:-1800} ))
 until curl -sf -m 5 "http://127.0.0.1:${port}/v1/models" 2>/dev/null | grep -q "\"$MODEL\""; do
   (( $(date +%s) < deadline )) || { echo "ERROR: router not serving $MODEL in time" >&2; k get pods -l "$selector" >&2; exit 1; }

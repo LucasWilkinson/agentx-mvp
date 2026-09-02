@@ -1,0 +1,132 @@
+diff --git a/vllm/distributed/kv_transfer/kv_connector/v1/base.py b/vllm/distributed/kv_transfer/kv_connector/v1/base.py
+--- a/vllm/distributed/kv_transfer/kv_connector/v1/base.py
++++ b/vllm/distributed/kv_transfer/kv_connector/v1/base.py
+@@ -301,6 +301,10 @@ class KVConnectorBase_V1(ABC):
+         """
+         return
+ 
++    def wait_for_previous_forward(self) -> None:
++        """Wait before mutating buffers still consumed by async KV work."""
++        return
++
+     def finish_forward(self) -> None:
+         """Notify the connector that the model no longer reads this step's KV."""
+         return
+diff --git a/vllm/distributed/kv_transfer/kv_connector/v1/hisparse/connector.py b/vllm/distributed/kv_transfer/kv_connector/v1/hisparse/connector.py
+index 89b312e9d..74b27b14d 100644
+--- a/vllm/distributed/kv_transfer/kv_connector/v1/hisparse/connector.py
++++ b/vllm/distributed/kv_transfer/kv_connector/v1/hisparse/connector.py
+@@ -151,6 +151,10 @@ class HiSparseConnector(KVConnectorBase_V1):
+     def requires_kv_delivery(self) -> bool:
+         return False
+ 
++    def wait_for_previous_forward(self) -> None:
++        assert self.connector_worker is not None
++        self.connector_worker.wait_for_previous_forward()
++
+     def finish_forward(self) -> None:
+         assert self.connector_worker is not None
+         self.connector_worker.finish_forward()
+diff --git a/vllm/distributed/kv_transfer/kv_connector/v1/hisparse/worker.py b/vllm/distributed/kv_transfer/kv_connector/v1/hisparse/worker.py
+index 0955b02b3..f59782d2e 100644
+--- a/vllm/distributed/kv_transfer/kv_connector/v1/hisparse/worker.py
++++ b/vllm/distributed/kv_transfer/kv_connector/v1/hisparse/worker.py
+@@ -180,6 +180,9 @@ class HiSparseConnectorWorker:
+         self.host_write_event = _create_hisparse_host_event(
+             shared_host_region, is_host_writer, device
+         )
++        self.host_write_stream = (
++            torch.Stream(device=device) if is_host_writer else None
++        )
+         self.cache_handles = cache_handles
+         for cache in cache_handles:
+             cache.defer_host_mirror = True
+@@ -370,6 +373,12 @@ class HiSparseConnectorWorker:
+         self._spill_staging_index = 0
+         self._spill_staging_events = [torch.Event() for _ in range(spill_staging_count)]
+ 
++    def wait_for_previous_forward(self) -> None:
++        # This runs before input preparation mutates the shared slot mappings
++        # consumed by the preceding forward's asynchronous host mirror.
++        current_stream = torch.accelerator.current_stream(self.hot_backing.device)
++        current_stream.wait_event(self.host_write_event)
++
+     def start_step(
+         self,
+         metadata: HiSparseConnectorMetadata,
+@@ -378,10 +387,6 @@ class HiSparseConnectorWorker:
+             handle.num_actual_tokens = 0
+             handle.num_decode_tokens = 0
+             handle.req_id_per_token = None
+-        if not self.is_host_writer:
+-            torch.accelerator.current_stream(self.hot_backing.device).wait_event(
+-                self.host_write_event
+-            )
+         copy_kv_cache_blocks_inplace(
+             self.host_caches,
+             self.host_num_blocks,
+@@ -630,12 +635,20 @@ class HiSparseConnectorWorker:
+ 
+     def finish_forward(self) -> None:
+         current_stream = torch.accelerator.current_stream(self.hot_backing.device)
+-        self._enqueue_host_mirror()
+         transfers = self._post_forward_transfers
+         self._post_forward_transfers = []
+-        self._enqueue_transfers(transfers)
+-        if self.is_host_writer:
+-            self.host_write_event.record(current_stream)
++        if not self.is_host_writer:
++            # Readers still maintain their local GPU index state.
++            self._enqueue_host_mirror()
++            return
++
++        host_write_stream = self.host_write_stream
++        assert host_write_stream is not None
++        host_write_stream.wait_stream(current_stream)
++        with torch.cuda.stream(host_write_stream):
++            self._enqueue_host_mirror()
++            self._enqueue_transfers(transfers)
++            self.host_write_event.record(host_write_stream)
+ 
+     def take_transfer_updates(self) -> tuple[list[int], list[int]]:
+         enqueued = self._enqueued_transfer_ids
+diff --git a/vllm/v1/worker/gpu/kv_connector.py b/vllm/v1/worker/gpu/kv_connector.py
+index 07c7fec79..f084d72ee 100644
+--- a/vllm/v1/worker/gpu/kv_connector.py
++++ b/vllm/v1/worker/gpu/kv_connector.py
+@@ -37,6 +37,9 @@ class KVConnector:
+     ) -> None:
+         pass
+ 
++    def wait_for_previous_forward(self) -> None:
++        pass
++
+     def finish_forward(self) -> None:
+         pass
+ 
+@@ -95,6 +98,10 @@ class ActiveKVConnector(KVConnector):
+                     get_forward_context(), request_state_indices=batch_request_indices
+                 )
+ 
++    def wait_for_previous_forward(self) -> None:
++        if not self._disabled:
++            self.kv_connector.wait_for_previous_forward()
++
+     def finish_forward(self) -> None:
+         if not self._disabled:
+             self.kv_connector.finish_forward()
+diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runner.py
+index 818b3b79f..928b66c34 100644
+--- a/vllm/v1/worker/gpu/model_runner.py
++++ b/vllm/v1/worker/gpu/model_runner.py
+@@ -1547,6 +1547,10 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+         context_len: int = 0,
+     ) -> ModelRunnerOutput | IntermediateTensors | None:
+         if not dummy_run:
++            # Complete asynchronous KV work before request/block-table updates
++            # mutate buffers retained from the preceding forward.
++            self.kv_connector.wait_for_previous_forward()
++
+             # Update the request states.
+             self.update_pp_decode_requests()
+             self.finish_requests(scheduler_output)

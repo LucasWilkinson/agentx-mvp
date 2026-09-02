@@ -59,6 +59,7 @@ instance_selector() {
 render_model() {
   local spec="$1"
   local dev_args=()
+  local path_args=()
   if [[ -n "$VLLM_ENV" ]]; then
     # neuralmagic/llm-manifesto takes the vllm-envs worktree as --vllm-env; older forks used --dev-venv/--dev-source.
     if manifesto render manifest --help 2>/dev/null | grep -q -- '--vllm-env'; then
@@ -67,6 +68,16 @@ render_model() {
       dev_args=(--dev-venv "$VLLM_ENV/.venv" --dev-source "$VLLM_ENV")
     fi
   fi
-  manifesto render manifest "$spec" --cluster "$MANIFESTO_CLUSTER" --namespace "$NAMESPACE" --user "$MANIFESTO_USER" "${dev_args[@]}" \
-    | VLLM_IMAGE="$VLLM_IMAGE" uv run --quiet --project "$MANIFESTO_ROOT" python scripts/filter-render.py
+  [[ -z "${MANIFESTO_LOG_ROOT:-}" ]] || path_args+=(--log-root "$MANIFESTO_LOG_ROOT")
+  [[ -z "${MANIFESTO_CACHE_ROOT:-}" ]] || path_args+=(--cache-root "$MANIFESTO_CACHE_ROOT")
+  if ((${#path_args[@]})); then
+    dev_args+=("${path_args[@]}")
+  fi
+  if ((${#dev_args[@]})); then
+    manifesto render manifest "$spec" --cluster "$MANIFESTO_CLUSTER" --namespace "$NAMESPACE" --user "$MANIFESTO_USER" "${dev_args[@]}" \
+      | VLLM_IMAGE="$VLLM_IMAGE" uv run --quiet --project "$MANIFESTO_ROOT" python scripts/filter-render.py
+  else
+    manifesto render manifest "$spec" --cluster "$MANIFESTO_CLUSTER" --namespace "$NAMESPACE" --user "$MANIFESTO_USER" \
+      | VLLM_IMAGE="$VLLM_IMAGE" uv run --quiet --project "$MANIFESTO_ROOT" python scripts/filter-render.py
+  fi
 }

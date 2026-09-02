@@ -1,0 +1,12 @@
+# B200 P/D AgentX comparison arm: PCP8 + DCP8 + EP8 prefiller and a fixed
+# DP8 + EP8 DSpark decoder. Run against the matching TP8/EP8 prefiller spec.
+extends: base-agentx-prefill8-dp8.yaml
+release: glm52-b200-agentx-pcp8-dp8
+roles:
+  prefill:
+    parallelism: {gpus: 8, tp: 1, pcp: 8, dcp: 8, dp: 1, ep: true}
+    env:
+      VLLM_USE_PCP_DIRECT_KV: "1"
+      VLLM_USE_DIRECT_DCP_KV_GATHER: "0"
+    vllm:
+      dcp_comm_backend: ag_rs

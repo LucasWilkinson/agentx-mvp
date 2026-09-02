@@ -6,10 +6,32 @@ release: glm52-p1-pcp8dcp8ep-d1-dp8ep-dspark
 roles:
   prefill:
     parallelism: {gpus: 8, tp: 1, pcp: 8, dcp: 8, dp: 1, ep: true}
+    # Match the old offloading deployment: publish KV to the decoder through
+    # NIXL and retain completed prefixes in a 100 GiB native CPU tier.
+    kv_transfer_config:
+      kv_connector: MultiConnector
+      kv_role: kv_both
+      kv_load_failure_policy: fail
+      kv_connector_extra_config:
+        connectors:
+          - kv_connector: NixlConnector
+            kv_role: kv_producer
+            kv_load_failure_policy: fail
+            kv_connector_extra_config:
+              enforce_handshake_compat: false
+              num_threads: 1
+          - kv_connector: OffloadingConnector
+            kv_role: kv_both
+            kv_connector_extra_config:
+              spec_name: TieringOffloadingSpec
+              cpu_bytes_to_use: 107374182400
+              eviction_policy: lru
     env:
-      MANIFESTO_VLLM_ENV: /workspace/vdptest/frankenstein-prefiller-lucas-dcp
-      PYTHONPATH: /workspace/vdptest/frankenstein-prefiller-lucas-dcp
-      VLLM_USE_PCP_DIRECT_KV: "1"
+      MANIFESTO_VLLM_ENV: /workspace/vdptest/frankenstein-prefiller-lucas-dcp-offload
+      PYTHONPATH: /workspace/vdptest/frankenstein-prefiller-lucas-dcp-offload
+      # Direct PCP KV intentionally disables prefix caching/copy-on-write.
+      # PCP-spanning DCP supports the gathered path, which is required here.
+      VLLM_USE_PCP_DIRECT_KV: "0"
       VLLM_USE_DIRECT_DCP_KV_GATHER: "0"
     vllm:
       # Null omits --max-model-len and uses the checkpoint default.
@@ -30,8 +52,8 @@ roles:
   decode:
     parallelism: {tp: 1, dp: 8, ep: true}
     env:
-      MANIFESTO_VLLM_ENV: /workspace/vdptest/frankenstein-prefiller-lucas-dcp
-      PYTHONPATH: /workspace/vdptest/frankenstein-prefiller-lucas-dcp
+      MANIFESTO_VLLM_ENV: /workspace/vdptest/frankenstein-prefiller-lucas-dcp-offload
+      PYTHONPATH: /workspace/vdptest/frankenstein-prefiller-lucas-dcp-offload
       # Avoid a duplicate graph capture that trips PyTorch's pinned-host
       # allocator; 0.94 without estimation matches ~0.985 with its 4.45 GiB reserve.
       VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS: "0"

@@ -1,0 +1,19 @@
+# PCP8 + DCP8 + EP8 A2A prefiller with the shared decoder.
+extends: base-agentx-prefill8-dp8.yaml
+release: glm53-h200-pcp8-dcp8-ep8-a2a
+model:
+  label: glm53-h200-pcp8-dcp8-ep8-a2a
+  served_name: glm53-h200-pcp8-dcp8-ep8-a2a
+roles:
+  prefill:
+    parallelism: {gpus: 8, tp: 1, pcp: 8, dcp: 8, dp: 1, ep: true}
+    kv_transfer_config:
+      engine_id: glm53-h200-pcp8-dcp8-ep8-a2a-prefill
+    env:
+      VLLM_USE_PCP_DIRECT_KV: "0"
+      VLLM_USE_DIRECT_DCP_KV_GATHER: "0"
+      VLLM_USE_DIRECT_DCP_A2A: "0"
+    vllm:
+      dcp_comm_backend: a2a
+      attention_config:
+        sparse_mla_force_mqa: "True"

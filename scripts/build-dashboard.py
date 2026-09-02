@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build results/<sweep>/interactivity_vs_throughput.html from a downloaded sweep directory.
+"""Build a sweep's interactivity_vs_throughput.html under results/.artifacts/.
 
 The sweep layout (results_<config>/results_<config>_c<N>/profile_export_aiperf.json) is
 exactly what gen_interactivity_chart.py expects, so this is a thin wrapper that checks the

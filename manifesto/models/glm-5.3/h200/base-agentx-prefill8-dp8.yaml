@@ -1,0 +1,32 @@
+# Shared H200 comparison settings. Each role occupies one complete 8xH200 node.
+extends: base-frankenstein.yaml
+roles:
+  prefill:
+    resources: {cpu: 64, memory: 600Gi, gpus: 8, ephemeral_storage: 100Gi}
+    env:
+      VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS: "0"
+    vllm:
+      max_model_len: 142000
+      gpu_memory_utilization: 0.90
+      max_num_batched_tokens: 32768
+      max_num_seqs: 256
+      enable_prefix_caching: true
+      compilation_config: {cudagraph_mode: NONE}
+      kernel_config:
+        enable_flashinfer_autotune: false
+        linear_backend: deep_gemm
+  decode:
+    parallelism: {gpus: 8, tp: 1, dp: 8, ep: true}
+    resources: {cpu: 64, memory: 600Gi, gpus: 8, ephemeral_storage: 100Gi}
+    env:
+      VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS: "0"
+    vllm:
+      max_model_len: 142000
+      gpu_memory_utilization: 0.92
+      max_num_batched_tokens: 512
+      max_num_seqs: 64
+      enable_prefix_caching: true
+      compilation_config: $delete
+      kernel_config:
+        enable_flashinfer_autotune: false
+        linear_backend: deep_gemm

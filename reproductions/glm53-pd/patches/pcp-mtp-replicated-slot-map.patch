@@ -1,0 +1,49 @@
+diff --git a/vllm/v1/attention/ops/pcp.py b/vllm/v1/attention/ops/pcp.py
+--- a/vllm/v1/attention/ops/pcp.py
++++ b/vllm/v1/attention/ops/pcp.py
+@@ -21,6 +21,14 @@ def _gather_prefill_cache_inputs(
+     if num_decode_tokens == local_num_tokens:
+         return tensors, slot_mapping[:num_decode_tokens]
+ 
++    # Speculative verification is replicated across PCP ranks. Sparse MLA can
++    # classify a mixed speculative/non-speculative decode batch as decode plus
++    # prefill based on query length, but its tensors and slot mapping are still
++    # global already. A rank-local slot mapping is PCP-expanded by the manager;
++    # an exact-width mapping identifies the replicated layout.
++    if slot_mapping.numel() == local_num_tokens:
++        return tensors, slot_mapping
++
+     pcp_group = get_pcp_group()
+     gathered_prefills = tuple(
+         pcp_group.all_gather(tensor[num_decode_tokens:].contiguous(), dim=0)
+diff --git a/tests/v1/attention/test_pcp_ops.py b/tests/v1/attention/test_pcp_ops.py
+new file mode 100644
+--- /dev/null
++++ b/tests/v1/attention/test_pcp_ops.py
+@@ -0,0 +1,24 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++
++import torch
++
++from vllm.v1.attention.ops.pcp import _gather_prefill_cache_inputs
++
++
++def test_replicated_spec_verification_keeps_local_cache_inputs(monkeypatch):
++    """A mixed MTP verification step is replicated, not PCP-sharded."""
++
++    def fail_get_pcp_group():
++        raise AssertionError("replicated verification must not all-gather")
++
++    monkeypatch.setattr(
++        "vllm.v1.attention.ops.pcp.get_pcp_group", fail_get_pcp_group
++    )
++    cache_input = torch.arange(15).view(5, 3)
++    slot_mapping = torch.arange(5)
++
++    cache_inputs, cache_slot_mapping = _gather_prefill_cache_inputs(
++        (cache_input,), slot_mapping, num_decode_tokens=2
++    )
++
++    assert cache_inputs == (cache_input,)
++    assert cache_slot_mapping is slot_mapping

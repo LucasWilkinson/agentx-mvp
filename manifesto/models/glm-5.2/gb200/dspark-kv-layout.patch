@@ -1,0 +1,43 @@
+diff --git a/vllm/v1/worker/gpu/spec_decode/dspark/utils.py b/vllm/v1/worker/gpu/spec_decode/dspark/utils.py
+--- a/vllm/v1/worker/gpu/spec_decode/dspark/utils.py
++++ b/vllm/v1/worker/gpu/spec_decode/dspark/utils.py
+@@ -76,6 +76,9 @@ def load_dspark_model(
+         draft_model = get_model(
+             vllm_config=draft_vllm_config, model_config=draft_model_config
+         )
++    # The engine resolves the target layout after this copied CacheConfig exists.
++    # Keep it so the speculator can synchronize the draft layout in set_attn.
++    draft_model._draft_cache_config = draft_vllm_config.cache_config
+ 
+     if get_pp_group().world_size != 1:
+         raise NotImplementedError("DSpark does not support pipeline parallelism.")
+diff --git a/vllm/v1/worker/gpu/spec_decode/dflash/speculator.py b/vllm/v1/worker/gpu/spec_decode/dflash/speculator.py
+--- a/vllm/v1/worker/gpu/spec_decode/dflash/speculator.py
++++ b/vllm/v1/worker/gpu/spec_decode/dflash/speculator.py
+@@ -13,8 +13,11 @@ from vllm.config.compilation import CUDAGraphMode
+ from vllm.forward_context import BatchDescriptor, set_forward_context
+ from vllm.logger import init_logger
+ from vllm.triton_utils import tl, triton
+ from vllm.v1.attention.backend import AttentionCGSupport
+-from vllm.v1.attention.backends.utils import PAD_SLOT_ID
++from vllm.v1.attention.backends.utils import (
++    PAD_SLOT_ID,
++    record_kv_cache_layout,
++)
+ from vllm.v1.kv_cache_interface import KVCacheConfig
+ from vllm.v1.worker.gpu.attn_utils import build_slot_mappings_by_layer
+ from vllm.v1.worker.gpu.block_table import BlockTables
+@@ -174,6 +177,13 @@ class DFlashSpeculator(DraftModelSpeculator):
+         target_input_buffers: InputBuffers,
+         target_attn_groups: list[list[AttentionGroup]],
+     ) -> None:
++        # DSpark copies CacheConfig for its fp8 draft cache before the engine
++        # resolves the target's physical layout. Synchronize it before warmup.
++        draft_cache_config = getattr(self.model, "_draft_cache_config", None)
++        resolved_layout = self.vllm_config.cache_config.kv_cache_layout
++        if draft_cache_config is not None and resolved_layout is not None:
++            record_kv_cache_layout(draft_cache_config, resolved_layout)
++
+         super().set_attn(
+             model_state,
+             kv_cache_config,

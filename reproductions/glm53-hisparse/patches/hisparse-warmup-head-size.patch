@@ -1,0 +1,16 @@
+diff --git a/vllm/v1/attention/backends/mla/flashinfer_mla_sparse.py b/vllm/v1/attention/backends/mla/flashinfer_mla_sparse.py
+--- a/vllm/v1/attention/backends/mla/flashinfer_mla_sparse.py
++++ b/vllm/v1/attention/backends/mla/flashinfer_mla_sparse.py
+@@ -422,7 +422,11 @@ class FlashInferMLASparseImpl(SparseMLACommonImpl[FlashInferMLASparseMetadata]):
+         self._prepare_mqa_kernel(layer, kv_cache.device)
+ 
+         q = torch.zeros(
+-            (num_tokens, self.num_heads, self.qk_head_dim),
++            (
++                num_tokens,
++                self.num_heads,
++                self.kv_lora_rank + self.qk_rope_head_dim,
++            ),
+             dtype=kv_cache.dtype,
+             device=kv_cache.device,
+         )

@@ -1,0 +1,58 @@
+# GLM-5.3 specialization for one-node, eight-GPU CoreWeave H200 roles.
+extends: ../../glm-5.2/h200/base-frankenstein.yaml
+accelerator: h200
+model:
+  id: zai-org/GLM-5.3
+  label: GLM-5.3
+  served_name: glm-agentx
+  image: quay.io/rh-ee-lwilkins/vllm-envs-cuda:pr8-cv2
+runtime:
+  # One centrally pinned build is used by both P/D roles and all three arms.
+  vllm_env: /workspace/vdptest/frankenstein-prefiller-472fb3ff05
+  pre_launch:
+    - |-
+      actual=$(git -C "$MANIFESTO_VLLM_ENV" rev-parse HEAD)
+      if [ "$actual" != "$EXPECTED_VLLM_COMMIT" ]; then
+        echo "Expected vLLM $EXPECTED_VLLM_COMMIT, found $actual" >&2
+        exit 1
+      fi
+  env:
+    EXPECTED_VLLM_COMMIT: 472fb3ff056b5ab82ff9a7c3ce9a3e0f94dd9305
+roles:
+  prefill:
+    env:
+      PYTHONPATH: $delete
+      NVSHMEM_HCA_PREFIX: ibp
+      VLLM_SERVER_DEV_MODE: "1"
+    vllm:
+      revision: 30333038ada1f1dacb294a93270305a890b50c14
+      tokenizer_revision: 30333038ada1f1dacb294a93270305a890b50c14
+      kv_cache_dtype: fp8_ds_mla
+      moe_backend: deep_gemm
+      all2all_backend: deepep_high_throughput
+      enable_auto_tool_choice: true
+      tool_call_parser: glm47
+      reasoning_parser: glm45
+      speculative_config:
+        method: mtp
+        num_speculative_tokens: 3
+  decode:
+    env:
+      PYTHONPATH: $delete
+      NVSHMEM_HCA_PREFIX: ibp
+      VLLM_SERVER_DEV_MODE: "1"
+    vllm:
+      revision: 30333038ada1f1dacb294a93270305a890b50c14
+      tokenizer_revision: 30333038ada1f1dacb294a93270305a890b50c14
+      kv_cache_dtype: fp8_ds_mla
+      moe_backend: deep_gemm
+      all2all_backend: deepep_low_latency
+      enable_auto_tool_choice: true
+      tool_call_parser: glm47
+      reasoning_parser: glm45
+      speculative_config:
+        method: mtp
+        model: $delete
+        num_speculative_tokens: 3
+        draft_sample_method: $delete
+        kv_cache_dtype: $delete

@@ -1,10 +1,19 @@
 #!/usr/bin/env python3
-"""Warm a prefill server with random long prompts, capture one torch-profiler trace of a single prefill.
-Env: IP PORT WORDS MODEL NAME. Runs on the devbox (needs pod-network access)."""
+"""Warm a prefill server with random long prompts and optionally profile it.
+
+Env: IP PORT WORDS MODEL NAME. Set PROFILE=0 for timing-only runs. Runs on the
+devbox because it needs pod-network access.
+"""
 import json, os, random, time, urllib.request
 ip, port, words, model, name = os.environ["IP"], os.environ["PORT"], int(os.environ["WORDS"]), os.environ["MODEL"], os.environ["NAME"]
-# CONC>1 sends one prompt per port PORT..PORT+CONC-1 concurrently (multi-port external-LB DP ranks).
+# CONC>1 sends one prompt per port PORT..PORT+CONC-1 concurrently (multi-port
+# external-LB DP ranks). SAME_PORT=1 sends all concurrent prompts to PORT,
+# which is useful for profiling a single PCP/DCP prefiller.
 conc = int(os.environ.get("CONC", "1"))
+same_port = os.environ.get("SAME_PORT", "0") == "1"
+warmups = int(os.environ.get("WARMUPS", "3"))
+profile = os.environ.get("PROFILE", "1") == "1"
+profile_seed = int(os.environ.get("SEED", "999"))
 import threading
 base = f"http://{ip}:{port}"
 vocab = [f"w{i}" for i in range(5000)]
@@ -21,12 +30,16 @@ def prefill_one(seed, p):
 def prefill(seed):
     if conc == 1: return prefill_one(seed, port)
     out = [None] * conc
-    def run(i): out[i] = prefill_one(seed * 100 + i, int(port) + i)
+    def run(i):
+        target_port = int(port) if same_port else int(port) + i
+        out[i] = prefill_one(seed * 100 + i, target_port)
     ts = [threading.Thread(target=run, args=(i,)) for i in range(conc)]
     t = time.time(); [x.start() for x in ts]; [x.join() for x in ts]
     return time.time() - t, sum(n for _, n in out)  # aggregate tokens over all ranks, wall of the slowest
-for i in range(3):
+for i in range(warmups):
     dt, n = prefill(100 + i); print(f"[{name}] warm{i}: {n} tokens in {dt:.2f}s = {n/dt:.0f} tok/s", flush=True)
-post("/start_profile"); time.sleep(1)
-dt, n = prefill(999); print(f"[{name}] profiled: {n} tokens in {dt:.2f}s = {n/dt:.0f} tok/s", flush=True)
-post("/stop_profile"); print("profile stopped", flush=True)
+if profile:
+    post("/start_profile"); time.sleep(1)
+dt, n = prefill(profile_seed); print(f"[{name}] profiled: {n} tokens in {dt:.2f}s = {n/dt:.0f} tok/s", flush=True)
+if profile:
+    post("/stop_profile"); print("profile stopped", flush=True)

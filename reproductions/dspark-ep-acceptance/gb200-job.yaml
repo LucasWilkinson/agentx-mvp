@@ -1,0 +1,73 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lwilkinson-dspark-ep-accept-ab6-hard-v1
+  namespace: vllm
+  labels:
+    app.kubernetes.io/name: dspark-ep-acceptance
+    llm-d.ai/owner: lwilkinson
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 10800
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: dspark-ep-acceptance
+        llm-d.ai/owner: lwilkinson
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        nvidia.com/gpu.product: NVIDIA-GB200
+      containers:
+        - name: benchmark
+          image: nvcr.io/nvidia/pytorch:25.08-py3
+          command: [/bin/bash, -lc]
+          args:
+            - |-
+              set -euo pipefail
+              export HF_HOME=/mnt/local/hf_cache
+              export HOME=/mnt/lustre/lwilkinson/jit-cache/dspark-ep-acceptance/home
+              export XDG_CACHE_HOME=/mnt/lustre/lwilkinson/jit-cache/dspark-ep-acceptance/xdg
+              export VLLM_CACHE_ROOT=/mnt/lustre/lwilkinson/jit-cache/dspark-ep-acceptance/vllm
+              export TRITON_CACHE_DIR=/tmp/triton-cache
+              export VLLM_NO_USAGE_STATS=1
+              export VLLM_SERVER_DEV_MODE=1
+              mkdir -p "$HOME" "$XDG_CACHE_HOME" "$VLLM_CACHE_ROOT" "$TRITON_CACHE_DIR"
+              exec env \
+                REPO=/mnt/lustre/lwilkinson/vdptest/frankenstein-prefiller-lopez-ab6 \
+                HARNESS_DIR=/mnt/lustre/lwilkinson/bench-harness/dspark-ep-acceptance \
+                OUT_DIR=/mnt/lustre/lwilkinson/results/.artifacts/reproductions/dspark-ep-acceptance/lopez-ab6-gb200-hard-v1 \
+                bash /mnt/lustre/lwilkinson/bench-harness/dspark-ep-acceptance/run-b300-moe-matrix.sh
+          env:
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-secret
+                  key: HF_TOKEN
+          resources:
+            requests:
+              cpu: "32"
+              memory: 512Gi
+              nvidia.com/gpu: "4"
+            limits:
+              memory: 512Gi
+              nvidia.com/gpu: "4"
+          volumeMounts:
+            - name: shared-storage
+              mountPath: /mnt/lustre
+            - name: local-nvme
+              mountPath: /mnt/local
+            - name: dshm
+              mountPath: /dev/shm
+      volumes:
+        - name: shared-storage
+          persistentVolumeClaim:
+            claimName: lustre-pvc-vllm
+        - name: local-nvme
+          hostPath:
+            path: /mnt/numa0
+            type: Directory
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 2Gi

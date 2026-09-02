@@ -1,0 +1,87 @@
+# GKE discrete-B200 specialization. The GKE A4 nodes are amd64, expose eight
+# B200s and eight RoCE interfaces per node, and have no shared workspace PVC.
+extends: ../base-frankenstein.yaml
+accelerator: b200
+model:
+  image: docker.io/vllm/vllm-openai:v0.27.0
+runtime:
+  # The exact direct-PCP/DCP implementation used by the H200 run is not in the
+  # stock image. Overlay its Python-only patch stack onto the image package at
+  # startup, retaining the image's compiled SM100 extensions and dependencies.
+  pre_launch:
+    - |-
+      OVERLAY=/var/cache/vllm/frankenstein-fd71e708-dspark-layout1
+      if [ ! -f "$OVERLAY/.complete" ]; then
+        echo "Preparing vLLM direct-PCP/DCP overlay at fd71e708"
+        rm -rf -- "$OVERLAY"
+        mkdir -p "$OVERLAY/vllm" "$OVERLAY/source"
+        cp -a /usr/local/lib/python3.12/dist-packages/vllm/. "$OVERLAY/vllm/"
+        curl -fsSL --retry 5 --retry-all-errors \
+          https://github.com/LucasWilkinson/vllm/archive/fd71e708aef5431f0360e82d6b1405924390045e.tar.gz \
+          | tar -xz --strip-components=1 -C "$OVERLAY/source"
+        cp -a "$OVERLAY/source/vllm/." "$OVERLAY/vllm/"
+        python3 - "$OVERLAY/vllm" <<'PY'
+      from pathlib import Path
+      import sys
+
+      root = Path(sys.argv[1])
+      replacements = {
+          root / "v1/worker/gpu/spec_decode/dspark/utils.py": [
+              (
+                  '''        draft_model = get_model(
+                  vllm_config=draft_vllm_config, model_config=draft_model_config
+              )
+      ''',
+                  '''        draft_model = get_model(
+                  vllm_config=draft_vllm_config, model_config=draft_model_config
+              )
+          # Preserve the draft-only CacheConfig so its physical layout can be
+          # synchronized after the engine resolves the target layout.
+          draft_model._draft_cache_config = draft_vllm_config.cache_config
+      ''',
+              ),
+          ],
+          root / "v1/worker/gpu/spec_decode/dflash/speculator.py": [
+              (
+                  "from vllm.v1.attention.backends.utils import PAD_SLOT_ID\n",
+                  "from vllm.v1.attention.backends.utils import (\n"
+                  "    PAD_SLOT_ID,\n"
+                  "    record_kv_cache_layout,\n"
+                  ")\n",
+              ),
+              (
+                  '''    ) -> None:
+              super().set_attn(
+      ''',
+                  '''    ) -> None:
+              # DSpark may have copied CacheConfig for its fp8 draft KV cache
+              # before the engine resolved the physical layout.
+              draft_cache_config = getattr(self.model, "_draft_cache_config", None)
+              resolved_layout = self.vllm_config.cache_config.kv_cache_layout
+              if draft_cache_config is not None and resolved_layout is not None:
+                  record_kv_cache_layout(draft_cache_config, resolved_layout)
+              super().set_attn(
+      ''',
+              ),
+          ],
+      }
+      for path, edits in replacements.items():
+          text = path.read_text()
+          for old, new in edits:
+              if text.count(old) != 1:
+                  raise RuntimeError(f"Expected one patch site in {path}, found {text.count(old)}")
+              text = text.replace(old, new)
+          path.write_text(text)
+      PY
+        rm -rf -- "$OVERLAY/source"
+        touch "$OVERLAY/.complete"
+      fi
+roles:
+  prefill:
+    env:
+      PYTHONPATH: /var/cache/vllm/frankenstein-fd71e708-dspark-layout1
+      NVSHMEM_HCA_PREFIX: mlx5
+  decode:
+    env:
+      PYTHONPATH: /var/cache/vllm/frankenstein-fd71e708-dspark-layout1
+      NVSHMEM_HCA_PREFIX: mlx5

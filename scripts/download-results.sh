@@ -32,6 +32,7 @@ EOF
 
 k apply -f "$manifest" >/dev/null
 k wait --for=condition=Ready "pod/$helper" --timeout=2m >/dev/null
-mkdir -p results
-k cp "$helper:/results/$RESULTS_PREFIX/." results/
-echo "Downloaded to $(pwd)/results"
+destination="results/.artifacts/downloads/$RESULTS_PREFIX"
+mkdir -p "$destination"
+k cp "$helper:/results/$RESULTS_PREFIX/." "$destination/"
+echo "Downloaded to $(pwd)/$destination"

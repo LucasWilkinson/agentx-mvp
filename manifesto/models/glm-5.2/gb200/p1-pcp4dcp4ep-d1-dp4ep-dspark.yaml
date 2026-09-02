@@ -1,0 +1,34 @@
+# Capacity-friendly GB200 smoke topology. PCP remains within one four-GPU
+# Grace-Blackwell node; decode uses four local DP/EP ranks on a second node.
+# Use the DP2/DP8 variant when PCP+DP support and four free nodes are available.
+extends: p1-dp2pcp4dcp4ep-d1-dp8ep-dspark.yaml
+release: glm52-gb200-pcp4-dp4
+roles:
+  prefill:
+    lws: {size: 1, same_topology_key: nvidia.com/gpu.clique}
+    parallelism: {gpus: 4, tp: 1, pcp: 4, dcp: 4, dp: 1, ep: true}
+    routing_proxy: $delete
+    dp_load_balancing: $delete
+    env:
+      # AgentX exercises many PCP sampling batch shapes. The symmetric-memory
+      # scratch cache registers one NCCL window per shape and eventually fails
+      # ncclCommWindowRegister under high concurrency; use the PyNccl fallback.
+      VLLM_USE_NCCL_SYMM_MEM: "0"
+      # Required by the reference AgentX runner's prefix-cache reset endpoint.
+      VLLM_SERVER_DEV_MODE: "1"
+    vllm:
+      max_model_len: 142000
+      # A 16k AgentX prefill chunk needs roughly 1.75 GiB for the largest
+      # DeepGEMM output. 0.94 leaves too little transient headroom on GB200.
+      gpu_memory_utilization: 0.905
+  decode:
+    lws: {size: 1, same_topology_key: nvidia.com/gpu.clique}
+    parallelism: {tp: 1, dp: 4, ep: true}
+    resources: {cpu: 32, memory: 512Gi, gpus: 4}
+    env:
+      VLLM_SERVER_DEV_MODE: "1"
+    vllm:
+      max_model_len: 142000
+      gpu_memory_utilization: 0.96
+      compilation_config: {cudagraph_mode: NONE}
+      kernel_config: {enable_flashinfer_autotune: false}

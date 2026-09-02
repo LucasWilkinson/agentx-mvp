@@ -1,0 +1,37 @@
+# H200 correctness baseline: one NIXL producer per DP rank, matching DP8 decode.
+extends: base-frankenstein.yaml
+release: glm52-p1-dp8ep-d1-dp8ep-dspark-h200
+roles:
+  prefill:
+    parallelism: {tp: 1, dp: 8, ep: true}
+    routing_proxy: true
+    dp_load_balancing: external
+    env:
+      MANIFESTO_VLLM_ENV: /workspace/vdptest/glm53-prefiller
+      PYTHONPATH: /workspace/vdptest/glm53-prefiller
+      VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS: "0"
+    vllm:
+      max_model_len: 114688
+      gpu_memory_utilization: 0.90
+      max_num_batched_tokens: 2048
+      max_num_seqs: 16
+      enforce_eager: true
+      speculative_config:
+        method: dspark
+        model: RedHatAI/GLM-5.2-speculator.dspark
+        num_speculative_tokens: 7
+        draft_sample_method: probabilistic
+        kv_cache_dtype: fp8
+      kernel_config:
+        enable_flashinfer_autotune: false
+  decode:
+    parallelism: {tp: 1, dp: 8, ep: true}
+    env:
+      MANIFESTO_VLLM_ENV: /workspace/vdptest/glm53-prefiller
+      PYTHONPATH: /workspace/vdptest/glm53-prefiller
+      VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS: "0"
+    vllm:
+      max_model_len: 114688
+      gpu_memory_utilization: 0.938
+      max_num_batched_tokens: 512
+      max_num_seqs: 64

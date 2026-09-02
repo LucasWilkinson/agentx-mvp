@@ -1,0 +1,7 @@
+# GB200 P/D comparison arm: TP8 + EP8 prefiller across two four-GPU nodes,
+# with the same fixed two-node DP8 + EP8 DSpark decoder as the PCP8 arm.
+extends: base-agentx-prefill8-dp8.yaml
+release: glm52-gb200-tp8-dp8
+roles:
+  prefill:
+    parallelism: {gpus: 4, tp: 8, pcp: 1, dcp: 1, dp: 1, ep: true}

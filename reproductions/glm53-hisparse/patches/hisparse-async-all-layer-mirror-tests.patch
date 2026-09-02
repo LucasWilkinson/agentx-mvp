@@ -1,0 +1,71 @@
+diff --git a/tests/v1/worker/test_utils.py b/tests/v1/worker/test_utils.py
+--- a/tests/v1/worker/test_utils.py
++++ b/tests/v1/worker/test_utils.py
+@@ -1,6 +1,7 @@
+ # SPDX-License-Identifier: Apache-2.0
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+ 
++from contextlib import nullcontext
+ from types import SimpleNamespace
+ from unittest.mock import MagicMock, call
+ 
+@@ -492,6 +493,7 @@ def test_hisparse_finish_forward_mirrors_all_layers_once(
+     worker._enqueue_transfers = MagicMock()
+     worker.host_write_event = MagicMock()
+     current_stream = MagicMock()
++    worker.host_write_stream = MagicMock()
+     backup_layers = MagicMock()
+     invalidate_layers = MagicMock()
+     monkeypatch.setattr(
+@@ -509,6 +511,7 @@ def test_hisparse_finish_forward_mirrors_all_layers_once(
+     monkeypatch.setattr(
+         torch.accelerator, "current_stream", lambda device: current_stream
+     )
++    monkeypatch.setattr(torch.cuda, "stream", lambda stream: nullcontext())
+ 
+     worker.finish_forward()
+ 
+@@ -519,7 +522,9 @@ def test_hisparse_finish_forward_mirrors_all_layers_once(
+     torch.testing.assert_close(invalidate_layers.call_args.args[3], dst_slots[:2])
+     leader.invalidate_written_slots.assert_not_called()
+     follower.invalidate_written_slots.assert_not_called()
+-    worker.host_write_event.record.assert_called_once_with(current_stream)
++    worker.host_write_stream.wait_stream.assert_called_once_with(current_stream)
++    worker.host_write_event.record.assert_called_once_with(worker.host_write_stream)
++    worker._enqueue_transfers.assert_called_once_with([])
+ 
+ 
+ def test_hisparse_finish_forward_excludes_trailing_mtp_cache(monkeypatch):
+@@ -670,6 +675,7 @@ def test_hisparse_shared_host_reader_waits_for_writer(monkeypatch):
+     stream = MagicMock()
+     monkeypatch.setattr(torch.accelerator, "current_stream", lambda device: stream)
+ 
++    worker.wait_for_previous_forward()
+     worker.start_step(
+         SimpleNamespace(host_block_copies=[], command=None, source_block_ids=[]),
+         None,
+@@ -690,6 +696,7 @@ def test_hisparse_empty_step_does_not_replay_stale_host_mirror(monkeypatch):
+     worker.is_host_writer = True
+     worker.hot_backing = SimpleNamespace(device=torch.device("cpu"))
+     worker.host_write_event = MagicMock()
++    worker.host_write_stream = MagicMock()
+     worker.host_caches = ()
+     worker.host_num_blocks = 1
+     worker.cache_handles = [handle]
+@@ -699,6 +706,7 @@ def test_hisparse_empty_step_does_not_replay_stale_host_mirror(monkeypatch):
+     worker._enqueue_transfers = MagicMock()
+     stream = MagicMock()
+     monkeypatch.setattr(torch.accelerator, "current_stream", lambda device: stream)
++    monkeypatch.setattr(torch.cuda, "stream", lambda stream: nullcontext())
+ 
+     worker.start_step(
+         SimpleNamespace(host_block_copies=[], command=None, source_block_ids=[]),
+@@ -710,6 +718,8 @@ def test_hisparse_empty_step_does_not_replay_stale_host_mirror(monkeypatch):
+     assert handle.num_actual_tokens == 0
+     torch.testing.assert_close(handle.mirror_slot_mapping, torch.tensor([4, 5]))
+     worker._enqueue_transfers.assert_called_once_with([])
++    worker.host_write_stream.wait_stream.assert_called_once_with(stream)
++    worker.host_write_event.record.assert_called_once_with(worker.host_write_stream)
+ 
+ 
+ def test_hisparse_runtime_invalidates_only_scheduled_request_states():

@@ -1,0 +1,14 @@
+# TP8 + EP8 prefill control with the shared DP8 + EP8 MTP-3 decoder.
+extends: base-agentx-prefill8-dp8.yaml
+release: glm53-b200-tp8-ep8
+model:
+  label: glm53-b200-tp8-ep8
+  served_name: glm53-b200-tp8-ep8
+roles:
+  prefill:
+    parallelism: {gpus: 8, tp: 8, pcp: 1, dcp: 1, dp: 1, ep: true}
+    vllm:
+      # Leave headroom for sparse FlashMLA's 8 GiB per-rank temporary allocation.
+      gpu_memory_utilization: 0.82
+    kv_transfer_config:
+      engine_id: glm53-b200-tp8-ep8-prefill

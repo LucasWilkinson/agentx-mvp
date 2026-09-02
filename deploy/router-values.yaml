@@ -3,6 +3,12 @@
 router:
   epp:
     replicas: 1
+    # Permit the CPU-only router pod on GPU-tainted clusters whose small
+    # system node cannot host all isolated comparison routers.
+    tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
     flags:
       ha-enable-leader-election: false
     pluginsConfigFile: plugins.yaml

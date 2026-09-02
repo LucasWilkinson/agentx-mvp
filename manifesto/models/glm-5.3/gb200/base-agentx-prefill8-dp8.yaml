@@ -1,0 +1,41 @@
+# Shared settings for the GB200 AgentX prefiller comparison. Each role spans
+# two four-GPU nodes in one NVLink compute domain. Concrete arms change only
+# the prefill parallelism.
+extends: base-frankenstein.yaml
+roles:
+  prefill:
+    lws: {size: 2, same_topology_key: nvidia.com/gpu.clique}
+    resources: {cpu: 32, memory: 512Gi, gpus: 4}
+    env:
+      VLLM_SERVER_DEV_MODE: "1"
+      VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS: "1800"
+    vllm:
+      max_model_len: 142000
+      gpu_memory_utilization: 0.905
+      max_num_batched_tokens: 32768
+      max_num_seqs: 256
+      enable_prefix_caching: true
+      compilation_config: {cudagraph_mode: NONE}
+      kernel_config:
+        enable_flashinfer_autotune: false
+        linear_backend: deep_gemm
+  decode:
+    lws: {size: 2, same_topology_key: nvidia.com/gpu.clique}
+    parallelism: {gpus: 4, tp: 1, dp: 8, ep: true}
+    resources: {cpu: 32, memory: 512Gi, gpus: 4}
+    env:
+      VLLM_SERVER_DEV_MODE: "1"
+    vllm:
+      max_model_len: 142000
+      # Leave headroom for MTP CUDA-graph capture and the FlashInfer TRT-LLM
+      # FP8 MoE workspace. At 0.96, capture OOMs with < 400 MiB free.
+      gpu_memory_utilization: 0.92
+      max_num_batched_tokens: 512
+      max_num_seqs: 64
+      enable_prefix_caching: true
+      # Keep the experimental prefiller eager, but use vLLM's default CUDA
+      # graph mode on the shared decode path where launch overhead dominates.
+      compilation_config: $delete
+      kernel_config:
+        enable_flashinfer_autotune: false
+        linear_backend: deep_gemm

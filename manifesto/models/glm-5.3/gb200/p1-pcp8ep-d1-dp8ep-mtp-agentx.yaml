@@ -1,0 +1,14 @@
+# PCP8 + EP8 prefiller with the shared DP8 + EP8 MTP-3 decoder.
+extends: base-agentx-prefill8-dp8.yaml
+release: glm53-gb200-pcp8-ep8
+model:
+  label: glm53-gb200-pcp8-ep8
+  served_name: glm53-gb200-pcp8-ep8
+roles:
+  prefill:
+    parallelism: {gpus: 4, tp: 1, pcp: 8, dcp: 1, dp: 1, ep: true}
+    kv_transfer_config:
+      engine_id: glm53-gb200-pcp8-ep8-prefill
+    env:
+      VLLM_USE_PCP_DIRECT_KV: "0"
+      VLLM_USE_DIRECT_DCP_KV_GATHER: "0"

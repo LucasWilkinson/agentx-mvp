@@ -1,0 +1,36 @@
+diff --git a/vllm/v1/worker/gpu/pcp_manager.py b/vllm/v1/worker/gpu/pcp_manager.py
+--- a/vllm/v1/worker/gpu/pcp_manager.py
++++ b/vllm/v1/worker/gpu/pcp_manager.py
+@@ -175,8 +175,6 @@ class PCPManager:
+                         "draft cache."
+                     )
+             elif speculative_config.method == "mtp":
+-                if parallel_config.decode_context_parallel_size != 1:
+-                    raise NotImplementedError("MRV2 PCP MTP does not support DCP yet.")
+                 if speculative_config.enable_adaptive_verification:
+                     raise NotImplementedError(
+                         "MRV2 PCP MTP does not support adaptive verification yet."
+diff --git a/vllm/v1/worker/gpu/spec_decode/speculator.py b/vllm/v1/worker/gpu/spec_decode/speculator.py
+index 41a6fb00a5..41a6fb00a6 100644
+--- a/vllm/v1/worker/gpu/spec_decode/speculator.py
++++ b/vllm/v1/worker/gpu/spec_decode/speculator.py
+@@ -87,6 +87,7 @@ class DraftModelSpeculator(BaseSpeculator):
+                 parallel_config=replace(
+                     target_parallel_config,
+                     prefill_context_parallel_size=1,
++                    decode_context_parallel_size=1,
+                 ),
+             )
+         self.vllm_config = vllm_config
+diff --git a/tests/v1/worker/test_gpu_pcp_manager.py b/tests/v1/worker/test_gpu_pcp_manager.py
+--- a/tests/v1/worker/test_gpu_pcp_manager.py
++++ b/tests/v1/worker/test_gpu_pcp_manager.py
+@@ -116,7 +116,7 @@ def test_sparse_mla_pcp_accepts_mtp():
+     config = SimpleNamespace(
+         parallel_config=SimpleNamespace(
+             prefill_context_parallel_size=4,
+-            decode_context_parallel_size=1,
++            decode_context_parallel_size=8,
+             pipeline_parallel_size=1,
+         ),
+         model_config=SimpleNamespace(

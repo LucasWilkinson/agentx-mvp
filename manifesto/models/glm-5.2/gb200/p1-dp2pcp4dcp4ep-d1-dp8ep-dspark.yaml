@@ -1,0 +1,33 @@
+# OCI GB200: DP2 x PCP4 x DCP4 + EP8 prefill keeps PCP within each four-GPU
+# Grace-Blackwell node while expert weights span all eight ranks. Decode uses
+# DP8 + EP8 across two nodes in the same NVLink compute domain.
+extends: base-frankenstein.yaml
+# Keep the release short: LWS appends the role and ordinal to form pod
+# hostnames, which Kubernetes limits to 63 characters.
+release: glm52-gb200-pcp4dcp4
+roles:
+  prefill:
+    parallelism: {gpus: 4, tp: 1, pcp: 4, dcp: 4, dp: 2, ep: true}
+    routing_proxy: true
+    dp_load_balancing: external
+    env:
+      VLLM_USE_PCP_DIRECT_KV: "1"
+      VLLM_USE_DIRECT_DCP_KV_GATHER: "0"
+    vllm:
+      max_model_len: null
+      all2all_backend: deepep_high_throughput
+      dcp_comm_backend: ag_rs
+      gpu_memory_utilization: 0.90
+      max_num_batched_tokens: 16384
+      max_num_seqs: 16
+      compilation_config: {cudagraph_mode: NONE}
+      kernel_config:
+        enable_flashinfer_autotune: false
+        linear_backend: deep_gemm
+  decode:
+    parallelism: {tp: 1, dp: 8, ep: true}
+    vllm:
+      max_model_len: 114688
+      gpu_memory_utilization: 0.94
+      max_num_batched_tokens: 512
+      max_num_seqs: 64

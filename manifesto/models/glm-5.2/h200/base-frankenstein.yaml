@@ -1,0 +1,3 @@
+# H200 specialization for direct-PCP/NIXL prefill with DSpark decode.
+extends: ../base-frankenstein.yaml
+accelerator: h200
