@@ -21,6 +21,7 @@ STYLE = {
     "TP8+EP8 decoder-local (no P/D, 8 GPUs)": ("#f59e0b", "D", 1.0),
     "PCP8+EP8 (DCP1) -> TP8+EP8 (no-54036 20a94597)": ("#1e3a8a", "v", 1.0),
     "PCP8+DCP8+EP8 -> TP8+EP8 (token-sharded simplify a6f09074)": ("#dc2626", "P", 1.0),
+    "PCP8+EP8 (DCP1) -> TP8+EP8 (no direct KV 1ca5131a07)": ("#0891b2", "<", 1.0),
 }
 OFFSETS = {
     "PCP8+DCP8+EP8 -> TP8+EP8 (fixed 95eb419caf)": (8, 5),
@@ -29,6 +30,7 @@ OFFSETS = {
     "TP8+EP8 decoder-local (no P/D, 8 GPUs)": (8, 5),
     "PCP8+EP8 (DCP1) -> TP8+EP8 (no-54036 20a94597)": (-40, 6),
     "PCP8+DCP8+EP8 -> TP8+EP8 (token-sharded simplify a6f09074)": (8, -26),
+    "PCP8+EP8 (DCP1) -> TP8+EP8 (no direct KV 1ca5131a07)": (-46, -22),
 }
 INCLUDE = set(STYLE)  # pre-fix P/D series are excluded from the chart
 by = defaultdict(list)

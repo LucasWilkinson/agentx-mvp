@@ -11,6 +11,9 @@ SERIES = [  # (label, sweep dir, arm dir, points subdir, gpus)
     ("TP8+EP8 decoder-local (pre-fix)", "20260907T233000Z-b9914a14b8", "clean-pcp8-ep8-dspark-tp8", "points-decoder-local", 8),
     ("PCP8+EP8 (DCP1) -> TP8+EP8 (no-54036 20a94597)", "20260909T140000Z-no54036-20a94597", "no54036-pcp8-ep8-dspark-tp8", "points", 16),
     ("PCP8+DCP8+EP8 -> TP8+EP8 (token-sharded simplify a6f09074)", "20260909T150000Z-simplify-a6f09074", "simplify-pcp8-dcp8-ep8-dspark-tp8", "points", 16),
+    # Re-measured 2026-09-09: the original 20260909T050000Z sweep was deleted before
+    # its TPOT / total-token columns were transcribed, so the arm could not be plotted.
+    ("PCP8+EP8 (DCP1) -> TP8+EP8 (no direct KV 1ca5131a07)", "20260909T183000Z-nodk-1ca5131a", "nodk-pcp8-ep8-dspark-tp8", "points", 16),
 ]
 out = str(pathlib.Path(__file__).resolve().parent / "points.csv")
 # Older sweeps' raw points were purged; their aggregated rows survive only in

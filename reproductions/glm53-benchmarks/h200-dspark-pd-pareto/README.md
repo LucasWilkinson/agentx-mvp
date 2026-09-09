@@ -10,10 +10,31 @@ sweep directories under `results/.artifacts/reproductions/` were deleted on
 everything here was one `rm` away from being unrecoverable. Treat `points.csv` as
 source data, not as a derived artifact.
 
-Only these two series can still be re-collected from raw points:
+Only these series can still be re-collected from raw points:
 
 - `20260909T140000Z-no54036-20a94597` — PR 54036 backed out
 - `20260909T150000Z-simplify-a6f09074` — token-sharded DCP8 on the simplify branch
+- `20260909T183000Z-nodk-1ca5131a` — no direct KV, **re-measured**
+
+That last one is the cautionary tale. Its original sweep (`20260909T050000Z`) was
+deleted after only TTFT / output tok/s / rps / acceptance had been written up by
+hand. Both Pareto axes need `tpot_ms` and `total_tok_s_per_gpu`, neither of which
+was transcribed, so the arm could not be plotted at all and had to be re-run on
+the cluster. **Summarise a sweep by keeping its whole `points.csv` row, not the
+subset that answers the current question.**
+
+The re-run also shows how noisy the low-concurrency points are — same branch,
+same env, same commit, hours apart:
+
+| c | re-run TTFT | original TTFT | delta |
+|---|---|---|---|
+| 1 | 772.0 ms | 870.3 ms | -11.3% |
+| 2 | 936.5 ms | 1062.2 ms | -11.8% |
+| 4 | 7533.5 ms | 7529.6 ms | +0.1% |
+| 8 | 15868.8 ms | 15967.6 ms | -0.6% |
+
+c1/c2 move ~11% run to run while c4/c8 are stable to <1%. Any c1/c2 difference
+smaller than that is noise, not signal.
 
 ## Scripts
 
