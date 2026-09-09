@@ -1,0 +1,91 @@
+# Simplification branch (fork/frankenstein-nodk-simplify @ a6f0907412): the
+# no-direct-KV branch plus five simplification commits, the last of which
+# hoists forward_mqa_token_sharded into SparseMLACommonImpl. Shares the nodk
+# env directory, so the two specs must not run concurrently; the
+# EXPECTED_VLLM_COMMIT hook fails the pod loudly if the checkout is wrong.
+# GLM-5.3 + DSpark7 on the no-direct-KV prefiller lineage,
+# LucasWilkinson/vllm:frankenstein-prefiller-no-direct-kv, on CoreWeave H200.
+#
+# Same hardware-forced deviations as the clean/collectives bases (see
+# base-dspark7-frankenstein-collectives-agentx.yaml for the full rationale):
+# adaptive verification off on SM90, and 0.94 utilization for the TP1+EP8
+# prefiller against its 115.55 GiB of weights.
+#
+# Lineage. `frankenstein-prefiller-collectives` reached the no-direct-KV state
+# by keeping #52863 in history and reverting it in one 2508-line commit on top.
+# This branch instead drops the direct-KV work from the commit series:
+#
+#   * #52863 (symmetric-memory KV publication), #54030 (fuse the publication
+#     fence) and the peer-gather sparse MLA prefill are gone entirely;
+#   * #53661 part 3/3 became empty once part 2/3 was reduced;
+#   * six mixed commits were split, keeping only their non-direct-KV halves.
+#
+# 25 commits and 5968 insertions against base, versus 29 and 6118 for the
+# collectives branch and 27 and 8502 for the regroup branch that still carries
+# direct KV. csrc/ is byte-identical to base, so the env reuses the same
+# precompiled wheel.
+#
+# Two places where removing the path simplified rather than only shrank:
+#   * `collect_pcp` folded back into `self.use_pcp` (the alias existed only to
+#     distinguish collect-from-peers from publish-to-peers);
+#   * the native-offload dedup in offloading/config.py is keyed on the PCP
+#     topology instead of VLLM_USE_PCP_DIRECT_KV, which is the correct
+#     condition: under PCP with DCP=1 every rank gathers the whole prefill and
+#     inserts every row, so the caches are byte-identical replicas whether or
+#     not anything was published.
+#
+# Every PCP data movement is an ordinary collective, as on the collectives
+# branch: all-gather kv_c / k_pe / indexer_k for target KV; token-sharded query
+# all-gather plus LSE merge/reduce-scatter for DCP=PCP prefill; and an
+# all-gather of the PCP-sharded target states in the DSpark context-KV
+# precompute, after which each rank writes the draft rows it owns.
+# VLLM_USE_PCP_DIRECT_KV does not exist on this branch. PCP still admits
+# PIECEWISE graphs only.
+extends: base-agentx-prefill8-dp8.yaml
+runtime:
+  # Shared RWX workspace PVC: one `ve` env serves every node and both roles.
+  vllm_env: /workspace/vdptest/frankenstein-nodk-14553f2c
+  env:
+    EXPECTED_VLLM_COMMIT: a6f0907412b4f23463640327f6790d2125ab2681
+vars:
+  dspark: &dspark
+    method: dspark
+    model: RedHatAI/GLM-5.2-speculator.dspark
+    revision: cc714308fc4ad68b667a6a71bbf2a344c2ef903b
+    num_speculative_tokens: 7
+    draft_sample_method: probabilistic
+    kv_cache_dtype: fp8
+roles:
+  prefill:
+    env:
+      VLLM_USE_DIRECT_DCP_KV_GATHER: "0"
+      # A worker that dies on a signal otherwise leaves no trace at all.
+      PYTHONFAULTHANDLER: "1"
+    vllm:
+      max_model_len: 142000
+      gpu_memory_utilization: 0.94
+      max_num_batched_tokens: 16384
+      # DSpark's full-attention draft uses FlashInfer, which does not accept
+      # the packed verifier-only fp8_ds_mla cache dtype.
+      kv_cache_dtype: fp8
+      speculative_config: *dspark
+      # Prefix caching stays on: the copy-on-write path is exercised on both
+      # the replicated DCP1 and the PCP-spanning DCP=PCP layouts.
+      enable_prefix_caching: true
+      attention_config:
+        sparse_mla_force_mqa: true
+      compilation_config:
+        cudagraph_mode: PIECEWISE
+  decode:
+    env:
+      PYTHONFAULTHANDLER: "1"
+    # 48 vCPU + the 8 vCPU routing-proxy sidecar. The inherited 64 + 8 = 72
+    # cannot schedule next to the long-lived devbox/router pods (~60 vCPU
+    # requested) on whichever node they share, and nothing here needs it.
+    resources: {cpu: 48, memory: 600Gi, gpus: 8, ephemeral_storage: 100Gi}
+    vllm:
+      max_model_len: 142000
+      kv_cache_dtype: fp8
+      speculative_config:
+        <<: *dspark
+        enable_adaptive_verification: false
