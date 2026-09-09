@@ -1,0 +1,35 @@
+# Controlled TEP8 prefiller arm for the H200 DSpark7 P/D matrix: the decoder
+# and all cache/speculation settings match the PCP arms; only the prefiller
+# parallelism changes from PCP8+EP8+TP1 (direct-KV) to plain TP8+EP8.
+# Drafted 2026-09-08 after the draft-KV transfer fixes (fork 95eb419caf); not
+# yet run. Homogeneous TP8 -> TP8 NIXL reads (tp_ratio 1, no head slicing), so
+# the row-split path is not exercised; the drafter's LBNHC regions transfer as
+# whole 64 KiB blocks.
+extends: base-dspark7-frankenstein-clean-agentx.yaml
+release: glm53-h200-clean-tp8-ep8-d1-tp8-ep8-dspark7
+model:
+  label: glm53-h200-clean-tp8-ep8-d1-tp8-ep8-dspark7
+  served_name: glm53-h200-clean-tp8-ep8-d1-tp8-ep8-dspark7
+roles:
+  prefill:
+    env:
+      # The base turns on PCP direct-KV for its PCP8 prefillers; this one has
+      # no PCP group to publish to.
+      VLLM_USE_PCP_DIRECT_KV: "0"
+    parallelism: {gpus: 8, tp: 8, pcp: 1, dcp: 1, dp: 1, ep: true}
+    vllm:
+      # TP8 sharded weights are 88 GiB per H200 (the base's 0.94 is for the
+      # 115 GiB TP1+EP8 layout). 0.92 (the TP8 decoder value) OOMs on the
+      # first request: with 8 MLA heads per rank the FP8 sparse kernel pads
+      # heads 8 -> 64 and its mixed-batch path materialises a
+      # (16384 tokens x 64 heads x 2048 top-k) fp16 tensor = 4 GiB per rank,
+      # ~14 GiB over the profiled peak (2026-09-08, 2 crash loops). 0.85
+      # leaves ~21 GiB of headroom and ~20 GiB of KV (2.7x at 142K).
+      gpu_memory_utilization: 0.85
+  decode:
+    env:
+      # Kept off the GPU-direct-async UCX lanes like the other H200 arms; see
+      # the DCP8/DCP1 TP8 specs for the rank-0 read stall it avoids.
+      UCX_TLS: rc,cuda_copy,cuda_ipc,self,sm,tcp
+    parallelism: {gpus: 8, tp: 8, pcp: 1, dcp: 1, dp: 1, ep: true}
+    dp_load_balancing: $delete

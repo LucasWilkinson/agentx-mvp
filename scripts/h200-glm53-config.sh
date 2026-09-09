@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Source after .env: source scripts/h200-glm53-config.sh <config>.
+
+case "${1:-}" in
+  clean-pcp8-ep8-dspark-dp8)
+    MANIFESTO_USER="${H200_OWNER_PREFIX:-lwilkinson}-glm53-clean-pcp8-dp8"
+    MANIFESTO_SPEC=glm-5.3/h200/p1-pcp8ep-d1-dp8ep-dspark7-frankenstein-clean-agentx
+    MODEL=glm53-h200-clean-pcp8-ep8-d1-dp8-ep8-dspark7
+    ROUTER_RELEASE="${H200_ROUTER_PREFIX:-lw}-glm53-clean-pcp8-dp8-router"
+    ROUTER_PROBE_PORT=33120
+    ;;
+  clean-pcp8-ep8-dspark-tp8)
+    MANIFESTO_USER="${H200_OWNER_PREFIX:-lwilkinson}-glm53-clean-pcp8-tp8"
+    MANIFESTO_SPEC=glm-5.3/h200/p1-pcp8ep-d1-tp8ep-dspark7-frankenstein-clean-agentx
+    MODEL=glm53-h200-clean-pcp8-ep8-d1-tp8-ep8-dspark7
+    ROUTER_RELEASE="${H200_ROUTER_PREFIX:-lw}-glm53-clean-pcp8-tp8-router"
+    ROUTER_PROBE_PORT=33121
+    ;;
+  clean-pcp8-dcp8-ep8-dspark-dp8)
+    MANIFESTO_USER="${H200_OWNER_PREFIX:-lwilkinson}-glm53-clean-dcp8-dp8"
+    MANIFESTO_SPEC=glm-5.3/h200/p1-pcp8dcp8ep-d1-dp8ep-dspark7-frankenstein-clean-agentx
+    MODEL=glm53-h200-clean-pcp8-dcp8-ep8-d1-dp8-ep8-dspark7
+    ROUTER_RELEASE="${H200_ROUTER_PREFIX:-lw}-glm53-clean-dcp8-dp8-router"
+    ROUTER_PROBE_PORT=33122
+    ;;
+  clean-pcp8-dcp8-ep8-dspark-tp8)
+    MANIFESTO_USER="${H200_OWNER_PREFIX:-lwilkinson}-glm53-clean-dcp8-tp8"
+    MANIFESTO_SPEC=glm-5.3/h200/p1-pcp8dcp8ep-d1-tp8ep-dspark7-frankenstein-clean-agentx
+    MODEL=glm53-h200-clean-pcp8-dcp8-ep8-d1-tp8-ep8-dspark7
+    ROUTER_RELEASE="${H200_ROUTER_PREFIX:-lw}-glm53-clean-dcp8-tp8-router"
+    ROUTER_PROBE_PORT=33123
+    ;;
+  coll-pcp8-ep8-dspark-tp8)
+    MANIFESTO_USER="${H200_OWNER_PREFIX:-lwilkinson}-glm53-coll-pcp8-tp8"
+    MANIFESTO_SPEC=glm-5.3/h200/p1-pcp8ep-d1-tp8ep-dspark7-frankenstein-collectives-agentx
+    MODEL=glm53-h200-coll-pcp8-ep8-d1-tp8-ep8-dspark7
+    ROUTER_RELEASE="${H200_ROUTER_PREFIX:-lw}-glm53-coll-pcp8-tp8-router"
+    ROUTER_PROBE_PORT=33126
+    ;;
+  coll-pcp8-dcp8-ep8-dspark-tp8)
+    MANIFESTO_USER="${H200_OWNER_PREFIX:-lwilkinson}-glm53-coll-dcp8-tp8"
+    MANIFESTO_SPEC=glm-5.3/h200/p1-pcp8dcp8ep-d1-tp8ep-dspark7-frankenstein-collectives-agentx
+    MODEL=glm53-h200-coll-pcp8-dcp8-ep8-d1-tp8-ep8-dspark7
+    ROUTER_RELEASE="${H200_ROUTER_PREFIX:-lw}-glm53-coll-dcp8-tp8-router"
+    ROUTER_PROBE_PORT=33127
+    ;;
+  clean-tp8-ep8-dspark-tp8)
+    MANIFESTO_USER="${H200_OWNER_PREFIX:-lwilkinson}-glm53-clean-tep8-tp8"
+    MANIFESTO_SPEC=glm-5.3/h200/p1-tp8ep-d1-tp8ep-dspark7-frankenstein-clean-agentx
+    MODEL=glm53-h200-clean-tp8-ep8-d1-tp8-ep8-dspark7
+    ROUTER_RELEASE="${H200_ROUTER_PREFIX:-lw}-glm53-clean-tep8-tp8-router"
+    ROUTER_PROBE_PORT=33125
+    ;;
+  *)
+    echo "usage: source scripts/h200-glm53-config.sh <clean-pcp8-ep8-dspark-dp8|clean-pcp8-ep8-dspark-tp8|clean-pcp8-dcp8-ep8-dspark-dp8|clean-pcp8-dcp8-ep8-dspark-tp8|clean-tp8-ep8-dspark-tp8>" >&2
+    return 2 2>/dev/null || exit 2
+    ;;
+esac
+
+URL="http://${ROUTER_RELEASE}-epp:80"
+export MANIFESTO_USER MANIFESTO_SPEC MODEL ROUTER_RELEASE ROUTER_PROBE_PORT URL

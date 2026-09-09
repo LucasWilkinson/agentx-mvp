@@ -1,0 +1,17 @@
+# Initial B200 compatibility target: PCP8+EP8 DSpark prefill into a
+# graph-enabled TP8+EP8 DSpark adaptive-verification decoder.
+extends: base-dspark-adaptive-frankenstein-agentx.yaml
+release: glm53-b200-pcp8-ep8-dspark-d1-tp8-ep8-adaptive
+model:
+  label: glm53-b200-pcp8-ep8-dspark-d1-tp8-ep8-adaptive
+  served_name: glm53-b200-pcp8-ep8-dspark-d1-tp8-ep8-adaptive
+roles:
+  prefill:
+    parallelism: {gpus: 8, tp: 1, pcp: 8, dcp: 1, dp: 1, ep: true}
+    kv_transfer_config:
+      engine_id: glm53-b200-pcp8-ep8-dspark-prefill
+    env:
+      VLLM_USE_DIRECT_DCP_KV_GATHER: "0"
+  decode:
+    parallelism: {gpus: 8, tp: 8, pcp: 1, dcp: 1, dp: 1, ep: true}
+    dp_load_balancing: $delete

@@ -1,0 +1,18 @@
+# PCP8+DCP8+EP8+TP1 direct-KV DSpark7 prefiller. DCP spans the full PCP group,
+# so each rank owns one KV shard and peers read the rest through symmetric
+# memory instead of holding a full replica. Feeds the DP8+EP8 DSpark7
+# adaptive-verification decoder.
+extends: base-dspark-adaptive-frankenstein-clean-agentx.yaml
+release: glm53-b200-clean-pcp8-dcp8-ep8-d1-dp8-ep8-adaptive
+model:
+  label: glm53-b200-clean-pcp8-dcp8-ep8-d1-dp8-ep8-adaptive
+  served_name: glm53-b200-clean-pcp8-dcp8-ep8-d1-dp8-ep8-adaptive
+roles:
+  prefill:
+    parallelism: {gpus: 8, tp: 1, pcp: 8, dcp: 8, dp: 1, ep: true}
+    env:
+      VLLM_USE_DIRECT_DCP_A2A: "0"
+    vllm:
+      dcp_comm_backend: a2a
+  decode:
+    parallelism: {gpus: 8, tp: 1, pcp: 1, dcp: 1, dp: 8, ep: true}

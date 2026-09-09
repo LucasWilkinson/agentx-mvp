@@ -1,0 +1,20 @@
+# PCP8+DCP8+EP8 -> TP8+EP8 DSpark7 arm with the drafter pinned to FlashInfer.
+# On H200 the drafter auto-selects FLASH_ATTN, whose KV layout is LBNHC (heads
+# interleaved inside each block). The B200 run of this arm used FLASHINFER,
+# whose layout is LBHNC (head-contiguous blocks). NIXL's head-sliced draft-KV
+# reads assume head-contiguous blocks, so this pins the drafter to FLASHINFER
+# on both roles to reproduce the B200 transfer geometry. Prefill
+# gpu_memory_utilization is lowered because with DCP8 each rank holds one
+# eighth of the KV pool and 0.94 left <1 GiB of headroom for the indexer's
+# 1 GiB DCP top-k all-gather.
+extends: p1-pcp8dcp8ep-d1-tp8ep-dspark7-frankenstein-clean-agentx.yaml
+roles:
+  prefill:
+    vllm:
+      gpu_memory_utilization: 0.90
+      speculative_config:
+        attention_backend: FLASHINFER
+  decode:
+    vllm:
+      speculative_config:
+        attention_backend: FLASHINFER

@@ -1,0 +1,15 @@
+# TP8+EP8 DSpark7 prefiller into a topology-matched TP8+EP8 DSpark7 adaptive
+# decoder, with a node-wide 512 GiB native KV host tier on both roles.
+# A TP8 prefiller cannot currently transfer DSpark KV to a DP8 decoder because
+# NIXL misclassifies the heterogeneous draft-attention region as SPLIT.
+extends: base-dspark-adaptive-kv-offload512-frankenstein-agentx.yaml
+release: glm53-b200-tp8-ep8-dspark-d1-tp8-ep8-adaptive-offload512
+model:
+  label: glm53-b200-tp8-ep8-dspark-d1-tp8-ep8-adaptive-offload512
+  served_name: glm53-b200-tp8-ep8-dspark-d1-tp8-ep8-adaptive-offload512
+roles:
+  prefill:
+    parallelism: {gpus: 8, tp: 8, pcp: 1, dcp: 1, dp: 1, ep: true}
+  decode:
+    parallelism: {gpus: 8, tp: 8, pcp: 1, dcp: 1, dp: 1, ep: true}
+    dp_load_balancing: $delete

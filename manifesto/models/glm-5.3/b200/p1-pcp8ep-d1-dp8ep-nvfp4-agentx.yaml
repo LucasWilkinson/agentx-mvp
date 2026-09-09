@@ -1,0 +1,13 @@
+extends: base-nvfp4-pr52705-agentx.yaml
+release: glm53-nvfp4-b200-pcp8-ep8
+model:
+  label: glm53-nvfp4-b200-pcp8-ep8
+  served_name: glm53-nvfp4-b200-pcp8-ep8
+roles:
+  prefill:
+    parallelism: {gpus: 8, tp: 1, pcp: 8, dcp: 1, dp: 1, ep: true}
+    kv_transfer_config:
+      engine_id: glm53-nvfp4-b200-pcp8-ep8-prefill
+    env:
+      VLLM_USE_PCP_DIRECT_KV: "0"
+      VLLM_USE_DIRECT_DCP_KV_GATHER: "0"

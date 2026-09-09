@@ -1,0 +1,22 @@
+# PCP8+EP8+TP1 DSpark7 prefiller with direct PCP KV materialization into a
+# TP8+EP8 DSpark7 adaptive decoder. P/D transfer remains NIXL and both roles
+# retain the node-wide 512 GiB native KV host tier.
+extends: p1-pcp8ep-d1-tp8ep-dspark-adaptive-kv-offload512-agentx.yaml
+release: glm53-b200-pcp8-tp8-dspark-pcp-direct-kv
+model:
+  label: glm53-b200-pcp8-tp8-dspark-pcp-direct-kv
+  served_name: glm53-b200-pcp8-tp8-dspark-pcp-direct-kv
+runtime:
+  vllm_env: /workspace/vdptest/pcp-direct-kv-sweep-900cf4d534
+  env:
+    EXPECTED_VLLM_COMMIT: 900cf4d5345f2946a5cadd0d7b81dc6159d19446
+roles:
+  prefill:
+    env:
+      VLLM_USE_PCP_DIRECT_KV: "1"
+      VLLM_USE_DIRECT_DCP_KV_GATHER: "0"
+    vllm:
+      # Direct PCP KV writes require the existing graph-free prefiller mode.
+      # Prefix-cache copy-on-write is validated by the pinned vLLM commit.
+      enable_prefix_caching: true
+      no_enable_prefix_caching: $delete

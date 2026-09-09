@@ -1,0 +1,16 @@
+# TP8 without expert parallelism into the same TP8+EP8 DSpark7 adaptive
+# decoder used by the TEP8 control. Both roles retain the node-wide 512 GiB KV
+# host tier so this arm differs only in prefiller expert parallelism.
+extends: base-dspark-adaptive-kv-offload512-frankenstein-agentx.yaml
+release: glm53-b200-tp8-dspark-d1-tp8-ep8-adaptive-offload512
+model:
+  label: glm53-b200-tp8-dspark-d1-tp8-ep8-adaptive-offload512
+  served_name: glm53-b200-tp8-dspark-d1-tp8-ep8-adaptive-offload512
+roles:
+  prefill:
+    parallelism: {gpus: 8, tp: 8, pcp: 1, dcp: 1, dp: 1, ep: false}
+    vllm:
+      all2all_backend: $delete
+  decode:
+    parallelism: {gpus: 8, tp: 8, pcp: 1, dcp: 1, dp: 1, ep: true}
+    dp_load_balancing: $delete

@@ -1,0 +1,15 @@
+# B200 P/D smoke: direct-KV PCP8+EP8 prefiller and DP8+EP8 decoder, both
+# running the GLM-5.2 DSpark draft with seven speculative tokens.
+extends: base-nvfp4-dspark-frankenstein-pr52705-agentx.yaml
+release: glm52-nvfp4-dspark-b200-pcp8-ep8-direct-kv
+model:
+  label: glm52-nvfp4-dspark-b200-pcp8-ep8-direct-kv
+  served_name: glm52-nvfp4-dspark-b200-pcp8-ep8-direct-kv
+roles:
+  prefill:
+    parallelism: {gpus: 8, tp: 1, pcp: 8, dcp: 1, dp: 1, ep: true}
+    kv_transfer_config:
+      engine_id: glm52-nvfp4-dspark-b200-pcp8-ep8-direct-kv-prefill
+    env:
+      VLLM_USE_PCP_DIRECT_KV: "1"
+      VLLM_USE_DIRECT_DCP_KV_GATHER: "0"

@@ -1,0 +1,6 @@
+# Frankenstein prefiller plus NVFP4 DeepGEMM MegaMoE integration settings.
+extends: base-nvfp4-pr52705-agentx.yaml
+runtime:
+  vllm_env: /workspace/vdptest/frankenstein-pr52705-dg409-3fe7a2a930
+  env:
+    EXPECTED_VLLM_COMMIT: 3fe7a2a930261f998f9f45f179df5640b0affc83

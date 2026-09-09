@@ -1,0 +1,15 @@
+# No-MTP PCP8 + DCP8 + EP8 diagnostic: use the standard FlashInfer MLA
+# attention backend with the A2A DCP collective instead of sparse FlashMLA.
+extends: p1-pcp8dcp8ep-d1-dp8ep-a2a-agentx.yaml
+release: glm53-b200-pcp8-dcp8-ep8-flashinfer-a2a
+model:
+  label: glm53-b200-pcp8-dcp8-ep8-flashinfer-a2a
+  served_name: glm53-b200-pcp8-dcp8-ep8-flashinfer-a2a
+roles:
+  prefill:
+    kv_transfer_config:
+      engine_id: glm53-b200-pcp8-dcp8-ep8-flashinfer-a2a-prefill
+    vllm:
+      attention_config:
+        backend: FLASHINFER
+        sparse_mla_force_mqa: $delete

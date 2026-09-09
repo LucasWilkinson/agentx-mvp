@@ -1,0 +1,14 @@
+# Prefill-only PCP8+EP8 arm on frankenstein-prefiller-clean-regroup + the three
+# commits of vllm-project/vllm#53173 (fused norm/RoPE + NVLS staging-buffer
+# publication). Direct KV off, so the fused workspace is the KV publication
+# path (auto-enabled: fp8 cache, q_lora 2048, kv_lora 512, index_head_dim 128).
+# Same benchmark as the directkv{1,0} arms.
+extends: prefill-only-pcp8ep-directkv0-frankenstein-clean-agentx.yaml
+release: glm53-h200-prefill-only-pcp8-ep8-pr53173
+model:
+  label: glm53-h200-prefill-only-pcp8-ep8-pr53173
+  served_name: glm53-h200-prefill-only-pcp8-ep8-pr53173
+runtime:
+  vllm_env: /workspace/vdptest/frankenstein-regroup-pr53173-0f3ab468
+  env:
+    EXPECTED_VLLM_COMMIT: ae836e7b27b62a3ac31272e57e237c94d6921624

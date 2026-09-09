@@ -1,0 +1,22 @@
+# PCP8+EP8+TP1 direct-KV DSpark7 prefiller with KV replicated to every PCP
+# peer (DCP1), into a topology-matched TP8+EP8 DSpark7
+# DSpark7 decoder.
+extends: base-dspark7-frankenstein-clean-agentx.yaml
+release: glm53-h200-clean-pcp8-ep8-d1-tp8-ep8-dspark7
+model:
+  label: glm53-h200-clean-pcp8-ep8-d1-tp8-ep8-dspark7
+  served_name: glm53-h200-clean-pcp8-ep8-d1-tp8-ep8-dspark7
+roles:
+  prefill:
+    parallelism: {gpus: 8, tp: 1, pcp: 8, dcp: 1, dp: 1, ep: true}
+  decode:
+    env:
+      # Same H200 UCX issue as the DCP8 arm: with the drafter's LBNHC regions
+      # read per token row (fork 0e591cadf8, 64 x 1 KiB descriptors per draft
+      # block) the decoder's GPU-direct-async lanes (rc_gda) stalled the first
+      # read to prefiller rank 0 for 5 min until "UCX AM send failed with
+      # status -80 (Endpoint timeout)" and NIXL_ERR_REMOTE_DISCONNECT
+      # (2026-09-08 13:18Z). Without rc_gda every read completes.
+      UCX_TLS: rc,cuda_copy,cuda_ipc,self,sm,tcp
+    parallelism: {gpus: 8, tp: 8, pcp: 1, dcp: 1, dp: 1, ep: true}
+    dp_load_balancing: $delete

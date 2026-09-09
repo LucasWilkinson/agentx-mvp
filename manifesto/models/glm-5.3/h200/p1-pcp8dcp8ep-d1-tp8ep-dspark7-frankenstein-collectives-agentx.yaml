@@ -1,0 +1,37 @@
+# PCP8+DCP8+EP8+TP1 DSpark7 prefiller on the collectives branch. DCP spans the
+# full PCP group, so each rank owns one KV shard and the sparse prefill runs
+# the token-sharded exchange (query all-gather + LSE merge/reduce-scatter)
+# instead of reading peer caches through symmetric memory. Feeds a topology-matched TP8+EP8
+# DSpark7 decoder.
+extends: base-dspark7-frankenstein-collectives-agentx.yaml
+release: glm53-h200-coll-pcp8-dcp8-ep8-d1-tp8-ep8-dspark7
+model:
+  label: glm53-h200-coll-pcp8-dcp8-ep8-d1-tp8-ep8-dspark7
+  served_name: glm53-h200-coll-pcp8-dcp8-ep8-d1-tp8-ep8-dspark7
+roles:
+  prefill:
+    parallelism: {gpus: 8, tp: 1, pcp: 8, dcp: 8, dp: 1, ep: true}
+    # H200 deviation from the B200 arm: ag_rs instead of a2a. On SM90 the
+    # sparse-MLA backend is FlashMLA sparse, which rejects anything but the
+    # ag_rs DCP comm backend ("DCP for FlashMLA sparse is only validated with
+    # the default 'ag_rs' DCP comm backend; got 'a2a'", flashmla_sparse.py:332),
+    # and this branch defaults a PCP-spanning DCP group to a2a when the flag
+    # is unset. The A2A token-sharded path that crashed the B200 arm lives in
+    # the FlashInfer sparse backend and never runs here.
+    vllm:
+      dcp_comm_backend: ag_rs
+      # DCP8 shards the KV pool 8x, so this rank never needs the DCP1 arm's
+      # 14 GiB of KV; 0.94 left <1 GiB of runtime headroom and the indexer's
+      # 1 GiB DCP top-k all-gather OOMed on the first request. 0.90 gives
+      # ~8.5 GiB KV/rank (6.5x 142K with the sharded pool) and ~5 GiB headroom.
+      gpu_memory_utilization: 0.90
+  decode:
+    env:
+      # A DCP8 prefiller makes every decoder rank read from all 8 prefiller
+      # ranks. On H200 the decoder's UCX GPU-direct-async lanes (rc_gda) hang
+      # on reads from prefiller rank 0 (endpoint timeout after ~5 min, then
+      # NIXL_ERR_REMOTE_DISCONNECT); excluding rc_gda makes every read
+      # complete. 2026-09-08, dcp8-h200-notes.md.
+      UCX_TLS: rc,cuda_copy,cuda_ipc,self,sm,tcp
+    parallelism: {gpus: 8, tp: 8, pcp: 1, dcp: 1, dp: 1, ep: true}
+    dp_load_balancing: $delete

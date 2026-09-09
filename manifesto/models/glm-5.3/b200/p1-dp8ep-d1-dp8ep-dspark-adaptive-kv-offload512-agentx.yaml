@@ -1,0 +1,55 @@
+# DP8+EP8 DSpark7 prefiller into the shared DP8+EP8 DSpark7 adaptive
+# decoder, with a node-wide 512 GiB native KV host tier on both roles.
+# Each role owns eight independent engines, so every engine receives 64 GiB.
+extends: base-dspark-adaptive-kv-offload512-frankenstein-agentx.yaml
+release: glm53-b200-dp8-ep8-dspark-d1-dp8-ep8-adaptive-offload512
+model:
+  label: glm53-b200-dp8-ep8-dspark-d1-dp8-ep8-adaptive-offload512
+  served_name: glm53-b200-dp8-ep8-dspark-d1-dp8-ep8-adaptive-offload512
+roles:
+  prefill:
+    parallelism: {gpus: 8, tp: 1, pcp: 1, dcp: 1, dp: 8, ep: true}
+    vllm:
+      # 0.90 is required to retain enough KV capacity for max_model_len=142000.
+      # DeepGEMM warmup scales this limit by DP world size. Both 32K and 16K
+      # OOMed during warmup; 8K reduces its largest temporary to about 4 GiB.
+      gpu_memory_utilization: 0.90
+      max_num_batched_tokens: 8192
+    kv_transfer_config:
+      kv_connector: MultiConnector
+      kv_role: kv_both
+      kv_load_failure_policy: fail
+      kv_connector_extra_config:
+        connectors:
+          - kv_connector: NixlConnector
+            kv_role: kv_producer
+            kv_load_failure_policy: fail
+            kv_connector_extra_config:
+              enforce_handshake_compat: false
+              num_threads: 1
+          - kv_connector: OffloadingConnector
+            kv_role: kv_both
+            kv_connector_extra_config:
+              spec_name: TieringOffloadingSpec
+              cpu_bytes_to_use: 68719476736 # 64 GiB/rank x 8 DP ranks
+              eviction_policy: lru
+  decode:
+    parallelism: {gpus: 8, tp: 1, pcp: 1, dcp: 1, dp: 8, ep: true}
+    kv_transfer_config:
+      kv_connector: MultiConnector
+      kv_role: kv_both
+      kv_load_failure_policy: fail
+      kv_connector_extra_config:
+        connectors:
+          - kv_connector: NixlConnector
+            kv_role: kv_consumer
+            kv_load_failure_policy: fail
+            kv_connector_extra_config:
+              enforce_handshake_compat: false
+              num_threads: 1
+          - kv_connector: OffloadingConnector
+            kv_role: kv_both
+            kv_connector_extra_config:
+              spec_name: TieringOffloadingSpec
+              cpu_bytes_to_use: 68719476736 # 64 GiB/rank x 8 DP ranks
+              eviction_policy: lru

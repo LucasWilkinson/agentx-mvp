@@ -1,0 +1,32 @@
+# PCP8+EP8+TP1 DSpark7 prefiller into TP8+EP8 DSpark7 adaptive decoder.
+#
+# This arm is identical to the unpatched offload512 arm except that both roles
+# use a separate `ve` environment made from the pinned base commit with
+# reproductions/pcp-dspark-acceptance-b300/
+# fix-hma-merged-dspark-shard-mapping.patch applied. This is the
+# HMA-region-aware DSpark shard mapping from vLLM commit 1e5c710a7.
+# The source change is Python-only and does not require recompilation.
+extends: p1-pcp8ep-d1-tp8ep-dspark-adaptive-kv-offload512-agentx.yaml
+release: glm53-b200-pcp8-tp8-dspark-offsetfix
+model:
+  label: glm53-b200-pcp8-tp8-dspark-offsetfix
+  served_name: glm53-b200-pcp8-tp8-dspark-offsetfix
+runtime:
+  vllm_env: /workspace/vdptest/pcp-dspark-offset-fix-56c8609f68
+  pre_launch:
+    - |-
+      actual=$(git -C "$MANIFESTO_VLLM_ENV" rev-parse HEAD)
+      if [ "$actual" != "$EXPECTED_VLLM_COMMIT" ]; then
+        echo "Expected vLLM $EXPECTED_VLLM_COMMIT, found $actual" >&2
+        exit 1
+      fi
+      target="$MANIFESTO_VLLM_ENV/vllm/distributed/kv_transfer/kv_connector/v1/nixl/tp_mapping.py"
+      if ! grep -q 'elif attention_group_num_splits is not None:' "$target"; then
+        echo "Expected mixed-MLA DSpark TP-offset patch is absent from $target" >&2
+        exit 1
+      fi
+      target="$MANIFESTO_VLLM_ENV/vllm/distributed/kv_transfer/kv_connector/v1/nixl/base_worker.py"
+      if ! grep -q 'has_mla_group and any(not is_mla' "$target"; then
+        echo "Expected HMA-region DSpark detection patch is absent from $target" >&2
+        exit 1
+      fi

@@ -1,0 +1,41 @@
+# Debug-only arm. Identical to
+# p1-pcp8dcp8ep-d1-dp8ep-dspark-adaptive-frankenstein-clean-agentx except that
+# the prefiller runs an instrumented copy of e7ede2722.
+#
+# That arm kills its prefiller mid-sweep, reproducibly, in
+# dcp_a2a_lse_reduce_token_sharded -> all_to_all_single with NCCL Error 1.
+# Three decisions in deepseek_v32/attention.py that gate whether a rank runs
+# the DCP collectives are rank-local, so the PCP group can desync:
+#
+#   attention.py:613  pcp_token_sharded gates on attn_metadata.num_prefills > 0
+#   attention.py:626  query_rows = output.shape[0] drives the 256-row chunk
+#                     loop, and each chunk issues all_gather + all_to_all_single
+#   flashinfer_mla_sparse.py:553  missing global PCP metadata silently falls
+#                     back to a local kernel that issues no collectives
+#
+# The probe all-gathers [sharded, rows, actual, prefills, decodes] from every
+# rank and prints PCP_DCP_DIVERGENCE when they disagree. Every rank runs it
+# unconditionally, so the probe cannot itself desync the group.
+#
+# Do not benchmark this arm. Its numbers include the probe collective.
+extends: p1-pcp8dcp8ep-d1-dp8ep-dspark-adaptive-frankenstein-clean-agentx.yaml
+release: glm53-b200-clean-dcp8-dp8-divergence-probe
+model:
+  label: glm53-b200-clean-dcp8-dp8-divergence-probe
+  served_name: glm53-b200-clean-dcp8-dp8-divergence-probe
+runtime:
+  vllm_env: /workspace/vdptest/dcp8-divergence-probe-e7ede2722
+  # The instrumented worktree is a copy, not a git worktree, so the inherited
+  # commit guard cannot run. Verify the probe is present instead.
+  pre_launch:
+    - |-
+      target="$MANIFESTO_VLLM_ENV/vllm/models/deepseek_v32/attention.py"
+      if ! grep -q 'PCP_DCP_DIVERGENCE' "$target"; then
+        echo "Divergence probe absent from $target" >&2
+        exit 1
+      fi
+roles:
+  prefill:
+    env:
+      VLLM_PCP_DIVERGENCE_PROBE: "1"
+      NCCL_DEBUG: WARN

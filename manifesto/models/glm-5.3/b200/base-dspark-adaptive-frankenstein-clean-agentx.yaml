@@ -1,0 +1,56 @@
+# GLM-5.3 + DSpark7 on the clean prefiller lineage,
+# LopezCastroRoberto/vllm:frankenstein-prefiller-clean.
+#
+# Every arm built on this base runs a PCP prefiller, and `PCPManager.
+# validate_config` constrains the role three ways:
+#
+#   1. DSpark under PCP requires VLLM_USE_PCP_DIRECT_KV=1, otherwise the
+#      context-KV precompute is skipped and each rank drafts from an
+#      incomplete context.
+#   2. PCP admits PIECEWISE CUDA graphs only.
+#   3. On da30e1b9f5 a direct-KV prefiller admitted a plain NixlConnector
+#      kv_producer only, rejecting other connectors and offloading. The pin
+#      below removes that guard; see the offload note further down.
+#
+# Pinned to e7ede2722, which is `frankenstein-prefiller-clean` (da30e1b9f5)
+# plus six commits. `git merge-base da30e1b9f5 e7ede2722` is da30e1b9f5, so
+# this is the pushed branch and nothing else. Three of the six are required
+# for this matrix to produce valid results:
+#
+#   8a1e0d1e7a/9806bdb527  DSpark draft KV layout. Without them every DSpark
+#     decoder dies in compile_or_warm_up_model with "KV cache layout has not
+#     been resolved yet". vllm-project/vllm#55384 is the upstream-track fix
+#     for the same bug and was verified to work here; these commits are the
+#     equivalent already on this lineage.
+#   2a84a3b416  PCP-to-TP DSpark KV region mapping. Without it a PCP8
+#     prefiller feeding a TP8 decoder fails EVERY NIXL transfer with
+#     "KV cache sizes must match between P and D when replicated (region 99:
+#     local=65536, remote=524288)" - the draft region replicated across PCP8
+#     versus sharded across TP8. The decoder silently recomputes prefill and
+#     DSpark acceptance collapses from ~84% to ~40%.
+#
+# 2a84a3b416 also deletes the guard that rejected every connector except a
+# plain NixlConnector kv_producer on a direct-KV prefiller, and e7ede2722b
+# makes native KV offload correct under direct-KV by storing one shared host
+# copy instead of PCP_SIZE identical replicas. So the 512 GiB host tier is
+# available on this commit; it is deliberately left off here so that this
+# matrix changes one variable at a time relative to the arms already run.
+extends: base-dspark-adaptive-frankenstein-agentx.yaml
+runtime:
+  vllm_env: /workspace/vdptest/frankenstein-clean-dspark-pd-e7ede2722
+  env:
+    EXPECTED_VLLM_COMMIT: e7ede2722b628b38b1496723f646cdb1e1b09f91
+roles:
+  prefill:
+    env:
+      VLLM_USE_PCP_DIRECT_KV: "1"
+      VLLM_USE_DIRECT_DCP_KV_GATHER: "0"
+    vllm:
+      # da30e1b9f5 stops force-disabling prefix caching under direct-KV and
+      # admits the copy-on-write path for both the replicated DCP1 and the
+      # PCP-spanning DCP=PCP layouts.
+      enable_prefix_caching: true
+      attention_config:
+        sparse_mla_force_mqa: true
+      compilation_config:
+        cudagraph_mode: PIECEWISE

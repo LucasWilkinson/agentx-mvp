@@ -1,0 +1,22 @@
+# Prefill-only PCP8+EP8 deployment (aggregated topology, no router, no
+# decoder) for measuring the cost of VLLM_USE_PCP_DIRECT_KV=1 on the prefill
+# side (#52863 direct publication vs the all-gather fallback). Same prefill
+# role as p1-pcp8ep-d1-tp8ep-dspark7-frankenstein-clean-agentx minus the
+# DSpark draft: PCPManager rejects DSpark without direct KV, and the drafter's
+# context-KV precompute would otherwise be a cost only the direct-KV arm pays.
+# Benchmarked by hitting the pod directly with max_tokens=1.
+extends: base-dspark7-frankenstein-clean-agentx.yaml
+topology: aggregated
+routing: {kind: disabled}
+release: glm53-h200-prefill-only-pcp8-ep8-directkv1
+model:
+  label: glm53-h200-prefill-only-pcp8-ep8-directkv1
+  served_name: glm53-h200-prefill-only-pcp8-ep8-directkv1
+roles:
+  prefill:
+    parallelism: {gpus: 8, tp: 1, pcp: 8, dcp: 1, dp: 1, ep: true}
+    env:
+      VLLM_USE_PCP_DIRECT_KV: "1"
+    vllm:
+      speculative_config: $delete
+  decode: $delete

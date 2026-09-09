@@ -1,0 +1,17 @@
+# Deterministic-draft resweep of the controlled PCP8+EP8 Direct-KV arm.
+# This changes only draft_sample_method from probabilistic to greedy on both
+# P and D; the topology, decoder, CUDA graphs, and KV offload remain identical.
+extends: p1-pcp8ep-d1-tp8ep-dspark7-kv-offload512-pcp-direct-kv-frankenstein-clean-agentx.yaml
+release: glm53-b200-pcp8-tp8-dspark7-greedy-clean
+model:
+  label: glm53-b200-pcp8-tp8-dspark7-greedy-clean
+  served_name: glm53-b200-pcp8-tp8-dspark7-greedy-clean
+roles:
+  prefill:
+    vllm:
+      speculative_config:
+        draft_sample_method: greedy
+  decode:
+    vllm:
+      speculative_config:
+        draft_sample_method: greedy

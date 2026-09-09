@@ -1,0 +1,48 @@
+# GLM-5.3 + DSpark adaptive verification with a node-wide 512 GiB native
+# host tier. This is KV offloading through OffloadingConnector, not model-
+# weight offloading. P/D transfer remains NIXL via MultiConnector.
+extends: base-dspark-adaptive-frankenstein-agentx.yaml
+roles:
+  prefill:
+    # TieringOffloadingSpec backs its shared host region with /dev/shm.
+    shm_size: 576Gi
+    kv_transfer_config:
+      kv_connector: MultiConnector
+      kv_role: kv_both
+      kv_load_failure_policy: fail
+      kv_connector_extra_config:
+        connectors:
+          - kv_connector: NixlConnector
+            kv_role: kv_producer
+            kv_load_failure_policy: fail
+            kv_connector_extra_config:
+              enforce_handshake_compat: false
+              num_threads: 1
+          - kv_connector: OffloadingConnector
+            kv_role: kv_both
+            kv_connector_extra_config:
+              spec_name: TieringOffloadingSpec
+              cpu_bytes_to_use: 549755813888 # 512 GiB total on the prefiller node
+              eviction_policy: lru
+  decode:
+    # TP uses one 512 GiB region; DP8 uses eight 64 GiB regions in this same
+    # pod-level tmpfs. Leave 64 GiB of allocation headroom in either case.
+    shm_size: 576Gi
+    kv_transfer_config:
+      kv_connector: MultiConnector
+      kv_role: kv_both
+      kv_load_failure_policy: fail
+      kv_connector_extra_config:
+        connectors:
+          - kv_connector: NixlConnector
+            kv_role: kv_consumer
+            kv_load_failure_policy: fail
+            kv_connector_extra_config:
+              enforce_handshake_compat: false
+              num_threads: 1
+          - kv_connector: OffloadingConnector
+            kv_role: kv_both
+            kv_connector_extra_config:
+              spec_name: TieringOffloadingSpec
+              cpu_bytes_to_use: 549755813888 # 512 GiB total across TP ranks
+              eviction_policy: lru

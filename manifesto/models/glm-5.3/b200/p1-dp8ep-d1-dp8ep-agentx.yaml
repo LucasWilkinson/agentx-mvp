@@ -1,0 +1,9 @@
+# No-MTP diagnostic variant. Keep separate from the canonical MTP3 curve.
+extends: p1-dp8ep-d1-dp8ep-mtp-agentx.yaml
+roles:
+  prefill:
+    vllm:
+      speculative_config: $delete
+  decode:
+    vllm:
+      speculative_config: $delete

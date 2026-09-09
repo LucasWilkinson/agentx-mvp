@@ -1,0 +1,28 @@
+# Pinned NVFP4/DeepGEMM MegaMoE comparison settings for B200.
+extends: base-agentx-prefill8-dp8.yaml
+model:
+  id: Inferact/GLM-5.3-NVFP4
+  label: GLM-5.3-NVFP4
+  served_name: glm53-nvfp4
+runtime:
+  vllm_env: /workspace/vdptest/pr52705-dg409-70a04c5142
+  env:
+    EXPECTED_VLLM_COMMIT: 70a04c514270dd6b6c1484da1ac80185218d5b65
+roles:
+  prefill:
+    env:
+      VLLM_USE_DEEP_GEMM: "1"
+    vllm:
+      revision: ce67b36f3669192b5bb233819f0fda6c8a9837f8
+      tokenizer_revision: ce67b36f3669192b5bb233819f0fda6c8a9837f8
+      gpu_memory_utilization: 0.85
+      moe_backend: deep_gemm_mega_moe
+      speculative_config: $delete
+  decode:
+    env:
+      VLLM_USE_DEEP_GEMM: "1"
+    vllm:
+      revision: ce67b36f3669192b5bb233819f0fda6c8a9837f8
+      tokenizer_revision: ce67b36f3669192b5bb233819f0fda6c8a9837f8
+      moe_backend: deep_gemm_mega_moe
+      speculative_config: $delete

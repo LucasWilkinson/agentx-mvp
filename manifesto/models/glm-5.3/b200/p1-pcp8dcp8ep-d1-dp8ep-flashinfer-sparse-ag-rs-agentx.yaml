@@ -1,0 +1,13 @@
+# No-MTP diagnostic using FlashInfer sparse MLA with the default AG/RS DCP
+# collective. Standard FP8 KV is required on both P/D roles by this backend.
+extends: p1-pcp8dcp8ep-d1-dp8ep-flashinfer-sparse-a2a-agentx.yaml
+release: glm53-b200-pcp8-dcp8-ep8-flashinfer-sparse-ag-rs
+model:
+  label: glm53-b200-pcp8-dcp8-ep8-flashinfer-sparse-ag-rs
+  served_name: glm53-b200-pcp8-dcp8-ep8-flashinfer-sparse-ag-rs
+roles:
+  prefill:
+    kv_transfer_config:
+      engine_id: glm53-b200-pcp8-dcp8-ep8-flashinfer-sparse-ag-rs-prefill
+    vllm:
+      dcp_comm_backend: ag_rs

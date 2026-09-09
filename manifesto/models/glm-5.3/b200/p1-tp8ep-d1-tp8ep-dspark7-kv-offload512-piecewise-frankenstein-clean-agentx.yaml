@@ -1,0 +1,29 @@
+# Controlled TEP8 prefiller comparison for the PCP Direct-KV curve.
+# The decoder and all cache/speculation settings match the PCP arm; only the
+# prefiller parallelism changes from PCP8+EP8+TP1 to TP8+EP8.
+extends: base-dspark-adaptive-kv-offload512-frankenstein-agentx.yaml
+release: glm53-b200-tep8-tp8-dspark7-piecewise-clean
+model:
+  label: glm53-b200-tep8-tp8-dspark7-piecewise-clean
+  served_name: glm53-b200-tep8-tp8-dspark7-piecewise-clean
+runtime:
+  vllm_env: /workspace/vdptest/frankenstein-clean-dspark-pd-e7ede2722
+  env:
+    EXPECTED_VLLM_COMMIT: e7ede2722b628b38b1496723f646cdb1e1b09f91
+roles:
+  prefill:
+    parallelism: {gpus: 8, tp: 8, pcp: 1, dcp: 1, dp: 1, ep: true}
+    vllm:
+      compilation_config: {cudagraph_mode: PIECEWISE}
+  decode:
+    parallelism: {gpus: 8, tp: 8, pcp: 1, dcp: 1, dp: 1, ep: true}
+    dp_load_balancing: $delete
+    vllm:
+      speculative_config:
+        method: dspark
+        model: RedHatAI/GLM-5.2-speculator.dspark
+        revision: cc714308fc4ad68b667a6a71bbf2a344c2ef903b
+        num_speculative_tokens: 7
+        draft_sample_method: probabilistic
+        kv_cache_dtype: fp8
+        enable_adaptive_verification: false

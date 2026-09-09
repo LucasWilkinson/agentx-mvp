@@ -1,0 +1,57 @@
+# Debug-only arm. Identical to
+# p1-pcp8dcp8ep-d1-tp8ep-dspark7-frankenstein-clean-agentx except that
+# the prefiller imports an instrumented worktree of e7ede2722.
+#
+# On H200 the DP8+EP8 DSpark decoder does not fit a 142K request, so the
+# probe pairs the DCP8 prefiller with the TP8 decoder instead. Note the H200
+# DCP8 prefiller runs FlashMLA sparse with the ag_rs DCP backend; the
+# FlashInfer A2A token-sharded path named below is Blackwell-only, so this
+# arm can only test the rank-local gating decisions, not that exact crash.
+#
+# On B200 that prefiller kills itself mid-sweep, reproducibly, in
+# dcp_a2a_lse_reduce_token_sharded -> all_to_all_single with NCCL Error 1.
+# Three decisions in deepseek_v32/attention.py that gate whether a rank runs
+# the DCP collectives are rank-local, so the PCP group can desync:
+#
+#   attention.py:613  pcp_token_sharded gates on attn_metadata.num_prefills > 0
+#   attention.py:626  query_rows = output.shape[0] drives the 256-row chunk
+#                     loop, and each chunk issues all_gather + all_to_all_single
+#   flashinfer_mla_sparse.py:553  missing global PCP metadata silently falls
+#                     back to a local kernel that issues no collectives
+#
+# The probe all-gathers [sharded, rows, actual, prefills, decodes] from every
+# rank and prints PCP_DCP_DIVERGENCE when they disagree. Every rank runs it
+# unconditionally, so the probe cannot itself desync the group.
+#
+# Do not benchmark this arm. Its numbers include the probe collective.
+extends: p1-pcp8dcp8ep-d1-tp8ep-dspark7-frankenstein-clean-agentx.yaml
+release: glm53-h200-clean-dcp8-tp8-divergence-probe
+model:
+  label: glm53-h200-clean-dcp8-tp8-divergence-probe
+  served_name: glm53-h200-clean-dcp8-tp8-divergence-probe
+runtime:
+  # Shared PVC: the instrumented tree is a plain git worktree of e7ede2722
+  # (no private venv; the 30-minute NFS venv copy is not worth repeating).
+  # The prefiller keeps the pinned env's .venv and puts the probe tree first
+  # on PYTHONPATH; the wheel-attached extension files (.so, vllm_flash_attn)
+  # are mirrored into the tree so imports resolve there. The inherited commit
+  # guard still holds because the worktree is at the same commit; verify the
+  # probe is actually the tree Python imports.
+  pre_launch:
+    - |-
+      probe=/workspace/vdptest/dcp8-divergence-probe-e7ede2722
+      if ! grep -q 'PCP_DCP_DIVERGENCE' "$probe/vllm/models/deepseek_v32/attention.py"; then
+        echo "Divergence probe absent from $probe" >&2
+        exit 1
+      fi
+      resolved=$(PYTHONPATH="$probe" "$MANIFESTO_VLLM_ENV/.venv/bin/python" -c 'import vllm,os;print(os.path.dirname(vllm.__file__))')
+      if [ "$resolved" != "$probe/vllm" ]; then
+        echo "Python resolves vllm to $resolved, not the probe tree" >&2
+        exit 1
+      fi
+roles:
+  prefill:
+    env:
+      PYTHONPATH: /workspace/vdptest/dcp8-divergence-probe-e7ede2722
+      VLLM_PCP_DIVERGENCE_PROBE: "1"
+      NCCL_DEBUG: WARN

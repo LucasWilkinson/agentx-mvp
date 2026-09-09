@@ -1,0 +1,14 @@
+# PCP8+EP8+TP1 direct-KV DSpark7 prefiller with KV replicated to every PCP
+# peer (DCP1), into a topology-matched TP8+EP8 DSpark7
+# adaptive-verification decoder.
+extends: base-dspark-adaptive-frankenstein-clean-agentx.yaml
+release: glm53-b200-clean-pcp8-ep8-d1-tp8-ep8-adaptive
+model:
+  label: glm53-b200-clean-pcp8-ep8-d1-tp8-ep8-adaptive
+  served_name: glm53-b200-clean-pcp8-ep8-d1-tp8-ep8-adaptive
+roles:
+  prefill:
+    parallelism: {gpus: 8, tp: 1, pcp: 8, dcp: 1, dp: 1, ep: true}
+  decode:
+    parallelism: {gpus: 8, tp: 8, pcp: 1, dcp: 1, dp: 1, ep: true}
+    dp_load_balancing: $delete

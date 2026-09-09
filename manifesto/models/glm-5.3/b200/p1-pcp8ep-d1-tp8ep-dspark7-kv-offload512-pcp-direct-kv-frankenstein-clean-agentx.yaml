@@ -1,0 +1,20 @@
+# PCP8+EP8+TP1 Direct-KV prefiller on the clean prefiller lineage, with the
+# recorded PCP-to-TP DSpark region mapping integration pinned below.
+extends: p1-pcp8ep-d1-tp8ep-dspark7-kv-offload512-pcp-direct-kv-agentx.yaml
+release: glm53-b200-pcp8-tp8-dspark7-frankenstein-clean
+model:
+  label: glm53-b200-pcp8-tp8-dspark7-frankenstein-clean
+  served_name: glm53-b200-pcp8-tp8-dspark7-frankenstein-clean
+runtime:
+  vllm_env: /workspace/vdptest/frankenstein-clean-dspark-pd-e7ede2722
+  env:
+    EXPECTED_VLLM_COMMIT: e7ede2722b628b38b1496723f646cdb1e1b09f91
+roles:
+  prefill:
+    env:
+      VLLM_USE_PCP_DIRECT_KV: "1"
+    vllm:
+      attention_config:
+        sparse_mla_force_mqa: true
+      compilation_config:
+        cudagraph_mode: PIECEWISE

@@ -1,0 +1,16 @@
+# PCP8+EP8 (DCP1) -> TP8+EP8 DSpark7 arm with the drafter pinned to FlashInfer.
+# Retest of the completed FLASH_ATTN-drafter run: on H200 that drafter uses the
+# LBNHC layout, and the TP1 -> TP8 NIXL head-slice reads of the draft KV assume
+# head-contiguous (LBHNC) blocks, which FlashInfer provides. If the P/D draft
+# acceptance gap (73% via P/D vs 83% decoder-local) closes here, the gap was
+# the scrambled draft context KV.
+extends: p1-pcp8ep-d1-tp8ep-dspark7-frankenstein-clean-agentx.yaml
+roles:
+  prefill:
+    vllm:
+      speculative_config:
+        attention_backend: FLASHINFER
+  decode:
+    vllm:
+      speculative_config:
+        attention_backend: FLASHINFER

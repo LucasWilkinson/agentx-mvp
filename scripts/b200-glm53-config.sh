@@ -2,12 +2,68 @@
 # Source after .env.b200: source scripts/b200-glm53-config.sh <config>.
 
 case "${1:-}" in
+  nvfp4-pcp8-ep8-direct-kv)
+    MANIFESTO_USER="${B200_OWNER_PREFIX:-lwilkinson}-glm53-nvfp4-pcp8-ep8-direct-kv"
+    MANIFESTO_SPEC=glm-5.3/b200/p1-pcp8ep-d1-dp8ep-direct-kv-nvfp4-agentx
+    MODEL=glm53-nvfp4-b200-pcp8-ep8-direct-kv
+    ROUTER_RELEASE="${B200_ROUTER_PREFIX:-lw}-glm53-nvfp4-pcp8-direct-router"
+    ROUTER_PROBE_PORT=33114
+    ;;
+  nvfp4-dp8-ep8)
+    MANIFESTO_USER="${B200_OWNER_PREFIX:-lwilkinson}-glm53-nvfp4-dp8-ep8"
+    MANIFESTO_SPEC=glm-5.3/b200/p1-dp8ep-d1-dp8ep-nvfp4-agentx
+    MODEL=glm53-nvfp4-b200-dp8-ep8
+    ROUTER_RELEASE="${B200_ROUTER_PREFIX:-lw}-glm53-nvfp4-dp8-router"
+    ROUTER_PROBE_PORT=33111
+    ;;
+  nvfp4-pcp8-ep8)
+    MANIFESTO_USER="${B200_OWNER_PREFIX:-lwilkinson}-glm53-nvfp4-pcp8-ep8"
+    MANIFESTO_SPEC=glm-5.3/b200/p1-pcp8ep-d1-dp8ep-nvfp4-agentx
+    MODEL=glm53-nvfp4-b200-pcp8-ep8
+    ROUTER_RELEASE="${B200_ROUTER_PREFIX:-lw}-glm53-nvfp4-pcp8-router"
+    ROUTER_PROBE_PORT=33112
+    ;;
+  nvfp4-tp8-ep8)
+    MANIFESTO_USER="${B200_OWNER_PREFIX:-lwilkinson}-glm53-nvfp4-tp8-ep8"
+    MANIFESTO_SPEC=glm-5.3/b200/p1-tp8ep-d1-dp8ep-nvfp4-agentx
+    MODEL=glm53-nvfp4-b200-tp8-ep8
+    ROUTER_RELEASE="${B200_ROUTER_PREFIX:-lw}-glm53-nvfp4-tp8-router"
+    ROUTER_PROBE_PORT=33113
+    ;;
+  dp8-ep8)
+    MANIFESTO_USER="${B200_OWNER_PREFIX:-lwilkinson}-glm53-dp8-ep8"
+    MANIFESTO_SPEC=glm-5.3/b200/p1-dp8ep-d1-dp8ep-agentx
+    MODEL=glm53-b200-dp8-ep8
+    ROUTER_RELEASE="${B200_ROUTER_PREFIX:-lw}-glm53-dp8-ep8-router"
+    ROUTER_PROBE_PORT=33108
+    ;;
+  dp8-ep8-mtp3)
+    MANIFESTO_USER="${B200_OWNER_PREFIX:-lwilkinson}-glm53-dp8-ep8"
+    MANIFESTO_SPEC=glm-5.3/b200/p1-dp8ep-d1-dp8ep-mtp-agentx
+    MODEL=glm53-b200-dp8-ep8
+    ROUTER_RELEASE="${B200_ROUTER_PREFIX:-lw}-glm53-dp8-ep8-router"
+    ROUTER_PROBE_PORT=33108
+    ;;
+  pcp8-ep8)
+    MANIFESTO_USER="${B200_OWNER_PREFIX:-lwilkinson}-glm53-pcp8-ep8"
+    MANIFESTO_SPEC=glm-5.3/b200/p1-pcp8ep-d1-dp8ep-agentx
+    MODEL=glm53-b200-pcp8-ep8
+    ROUTER_RELEASE="${B200_ROUTER_PREFIX:-lw}-glm53-pcp8-ep8-router"
+    ROUTER_PROBE_PORT=33101
+    ;;
   pcp8-ep8-mtp3)
     MANIFESTO_USER="${B200_OWNER_PREFIX:-lwilkinson}-glm53-pcp8-ep8"
     MANIFESTO_SPEC=glm-5.3/b200/p1-pcp8ep-d1-dp8ep-mtp-agentx
     MODEL=glm53-b200-pcp8-ep8
     ROUTER_RELEASE="${B200_ROUTER_PREFIX:-lw}-glm53-pcp8-ep8-router"
     ROUTER_PROBE_PORT=33101
+    ;;
+  pcp8-dcp8-ep8-a2a)
+    MANIFESTO_USER="${B200_OWNER_PREFIX:-lwilkinson}-glm53-pcp8-dcp8-ep8-a2a"
+    MANIFESTO_SPEC=glm-5.3/b200/p1-pcp8dcp8ep-d1-dp8ep-a2a-agentx
+    MODEL=glm53-b200-pcp8-dcp8-ep8-a2a
+    ROUTER_RELEASE="${B200_ROUTER_PREFIX:-lw}-glm53-pcp8-dcp8-a2a-router"
+    ROUTER_PROBE_PORT=33102
     ;;
   pcp8-dcp8-ep8-a2a-mtp3)
     MANIFESTO_USER="${B200_OWNER_PREFIX:-lwilkinson}-glm53-pcp8-dcp8-ep8-a2a"
@@ -16,6 +72,41 @@ case "${1:-}" in
     ROUTER_RELEASE="${B200_ROUTER_PREFIX:-lw}-glm53-pcp8-dcp8-a2a-router"
     ROUTER_PROBE_PORT=33102
     ;;
+  pcp8-dcp8-ep8-ag-rs)
+    MANIFESTO_USER="${B200_OWNER_PREFIX:-lwilkinson}-glm53-pcp8-dcp8-ep8-ag-rs"
+    MANIFESTO_SPEC=glm-5.3/b200/p1-pcp8dcp8ep-d1-dp8ep-ag-rs-agentx
+    MODEL=glm53-b200-pcp8-dcp8-ep8-ag-rs
+    ROUTER_RELEASE="${B200_ROUTER_PREFIX:-lw}-glm53-pcp8-dcp8-ag-rs-router"
+    ROUTER_PROBE_PORT=33104
+    ;;
+  pcp8-dcp8-ep8-flashinfer-a2a)
+    MANIFESTO_USER="${B200_OWNER_PREFIX:-lwilkinson}-glm53-pcp8-dcp8-ep8-flashinfer-a2a"
+    MANIFESTO_SPEC=glm-5.3/b200/p1-pcp8dcp8ep-d1-dp8ep-flashinfer-a2a-agentx
+    MODEL=glm53-b200-pcp8-dcp8-ep8-flashinfer-a2a
+    ROUTER_RELEASE="${B200_ROUTER_PREFIX:-lw}-glm53-pcp8-dcp8-flashinfer-a2a-router"
+    ROUTER_PROBE_PORT=33105
+    ;;
+  pcp8-dcp8-ep8-flashinfer-sparse-a2a)
+    MANIFESTO_USER="${B200_OWNER_PREFIX:-lwilkinson}-glm53-pcp8-dcp8-ep8-flashinfer-sparse-a2a"
+    MANIFESTO_SPEC=glm-5.3/b200/p1-pcp8dcp8ep-d1-dp8ep-flashinfer-sparse-a2a-agentx
+    MODEL=glm53-b200-pcp8-dcp8-ep8-flashinfer-sparse-a2a
+    ROUTER_RELEASE="${B200_ROUTER_PREFIX:-lw}-glm53-pcp8-dcp8-fi-sparse-a2a-router"
+    ROUTER_PROBE_PORT=33106
+    ;;
+  pcp8-dcp8-ep8-flashinfer-sparse-ag-rs)
+    MANIFESTO_USER="${B200_OWNER_PREFIX:-lwilkinson}-glm53-pcp8-dcp8-ep8-flashinfer-sparse-ag-rs"
+    MANIFESTO_SPEC=glm-5.3/b200/p1-pcp8dcp8ep-d1-dp8ep-flashinfer-sparse-ag-rs-agentx
+    MODEL=glm53-b200-pcp8-dcp8-ep8-flashinfer-sparse-ag-rs
+    ROUTER_RELEASE="${B200_ROUTER_PREFIX:-lw}-glm53-dcp8-fi-agrs-router"
+    ROUTER_PROBE_PORT=33107
+    ;;
+  tp8-ep8)
+    MANIFESTO_USER="${B200_OWNER_PREFIX:-lwilkinson}-glm53-tp8-ep8"
+    MANIFESTO_SPEC=glm-5.3/b200/p1-tp8ep-d1-dp8ep-agentx
+    MODEL=glm53-b200-tp8-ep8
+    ROUTER_RELEASE="${B200_ROUTER_PREFIX:-lw}-glm53-tp8-ep8-router"
+    ROUTER_PROBE_PORT=33103
+    ;;
   tp8-ep8-mtp3)
     MANIFESTO_USER="${B200_OWNER_PREFIX:-lwilkinson}-glm53-tp8-ep8"
     MANIFESTO_SPEC=glm-5.3/b200/p1-tp8ep-d1-dp8ep-mtp-agentx
@@ -23,8 +114,36 @@ case "${1:-}" in
     ROUTER_RELEASE="${B200_ROUTER_PREFIX:-lw}-glm53-tp8-ep8-router"
     ROUTER_PROBE_PORT=33103
     ;;
+  clean-pcp8-ep8-dspark-dp8)
+    MANIFESTO_USER="${B200_OWNER_PREFIX:-lwilkinson}-glm53-clean-pcp8-dp8"
+    MANIFESTO_SPEC=glm-5.3/b200/p1-pcp8ep-d1-dp8ep-dspark-adaptive-frankenstein-clean-agentx
+    MODEL=glm53-b200-clean-pcp8-ep8-d1-dp8-ep8-adaptive
+    ROUTER_RELEASE="${B200_ROUTER_PREFIX:-lw}-glm53-clean-pcp8-dp8-router"
+    ROUTER_PROBE_PORT=33120
+    ;;
+  clean-pcp8-ep8-dspark-tp8)
+    MANIFESTO_USER="${B200_OWNER_PREFIX:-lwilkinson}-glm53-clean-pcp8-tp8"
+    MANIFESTO_SPEC=glm-5.3/b200/p1-pcp8ep-d1-tp8ep-dspark-adaptive-frankenstein-clean-agentx
+    MODEL=glm53-b200-clean-pcp8-ep8-d1-tp8-ep8-adaptive
+    ROUTER_RELEASE="${B200_ROUTER_PREFIX:-lw}-glm53-clean-pcp8-tp8-router"
+    ROUTER_PROBE_PORT=33121
+    ;;
+  clean-pcp8-dcp8-ep8-dspark-dp8)
+    MANIFESTO_USER="${B200_OWNER_PREFIX:-lwilkinson}-glm53-clean-dcp8-dp8"
+    MANIFESTO_SPEC=glm-5.3/b200/p1-pcp8dcp8ep-d1-dp8ep-dspark-adaptive-frankenstein-clean-agentx
+    MODEL=glm53-b200-clean-pcp8-dcp8-ep8-d1-dp8-ep8-adaptive
+    ROUTER_RELEASE="${B200_ROUTER_PREFIX:-lw}-glm53-clean-dcp8-dp8-router"
+    ROUTER_PROBE_PORT=33122
+    ;;
+  clean-pcp8-dcp8-ep8-dspark-tp8)
+    MANIFESTO_USER="${B200_OWNER_PREFIX:-lwilkinson}-glm53-clean-dcp8-tp8"
+    MANIFESTO_SPEC=glm-5.3/b200/p1-pcp8dcp8ep-d1-tp8ep-dspark-adaptive-frankenstein-clean-agentx
+    MODEL=glm53-b200-clean-pcp8-dcp8-ep8-d1-tp8-ep8-adaptive
+    ROUTER_RELEASE="${B200_ROUTER_PREFIX:-lw}-glm53-clean-dcp8-tp8-router"
+    ROUTER_PROBE_PORT=33123
+    ;;
   *)
-    echo "usage: source scripts/b200-glm53-config.sh <pcp8-ep8-mtp3|pcp8-dcp8-ep8-a2a-mtp3|tp8-ep8-mtp3>" >&2
+    echo "usage: source scripts/b200-glm53-config.sh <nvfp4-pcp8-ep8-direct-kv|nvfp4-dp8-ep8|nvfp4-pcp8-ep8|nvfp4-tp8-ep8|dp8-ep8|dp8-ep8-mtp3|pcp8-ep8|pcp8-ep8-mtp3|pcp8-dcp8-ep8-a2a|pcp8-dcp8-ep8-a2a-mtp3|pcp8-dcp8-ep8-ag-rs|pcp8-dcp8-ep8-flashinfer-a2a|pcp8-dcp8-ep8-flashinfer-sparse-a2a|pcp8-dcp8-ep8-flashinfer-sparse-ag-rs|tp8-ep8|tp8-ep8-mtp3|clean-pcp8-ep8-dspark-dp8|clean-pcp8-ep8-dspark-tp8|clean-pcp8-dcp8-ep8-dspark-dp8|clean-pcp8-dcp8-ep8-dspark-tp8>" >&2
     return 2 2>/dev/null || exit 2
     ;;
 esac

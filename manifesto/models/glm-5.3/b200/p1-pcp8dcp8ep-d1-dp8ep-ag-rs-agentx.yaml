@@ -1,0 +1,18 @@
+# No-MTP PCP8 + DCP8 + EP8 prefiller using sparse FlashMLA's validated
+# DCP communication backend. Keep A2A-only attention overrides out of this arm.
+extends: base-agentx-prefill8-dp8.yaml
+release: glm53-b200-pcp8-dcp8-ep8-ag-rs
+model:
+  label: glm53-b200-pcp8-dcp8-ep8-ag-rs
+  served_name: glm53-b200-pcp8-dcp8-ep8-ag-rs
+roles:
+  prefill:
+    parallelism: {gpus: 8, tp: 1, pcp: 8, dcp: 8, dp: 1, ep: true}
+    kv_transfer_config:
+      engine_id: glm53-b200-pcp8-dcp8-ep8-ag-rs-prefill
+    vllm:
+      dcp_comm_backend: ag_rs
+      speculative_config: $delete
+  decode:
+    vllm:
+      speculative_config: $delete

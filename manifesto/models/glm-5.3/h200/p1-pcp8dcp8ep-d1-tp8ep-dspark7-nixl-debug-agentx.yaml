@@ -1,0 +1,16 @@
+# Diagnostic variant of the PCP8+DCP8+EP8 -> TP8+EP8 arm. Same topology; adds
+# NIXL/vLLM debug logging on both roles so the per-region KV block lengths each
+# side registers ("Registering descs") are visible, and lowers the prefill
+# gpu_memory_utilization: with DCP8 each rank holds one eighth of the KV pool,
+# so 0.94 left <1 GiB of runtime headroom and the indexer's DCP top-k merge
+# (a 1 GiB all-gather) OOMed on the first request.
+extends: p1-pcp8dcp8ep-d1-tp8ep-dspark7-frankenstein-clean-agentx.yaml
+roles:
+  prefill:
+    env:
+      VLLM_LOGGING_LEVEL: DEBUG
+    vllm:
+      gpu_memory_utilization: 0.90
+  decode:
+    env:
+      VLLM_LOGGING_LEVEL: DEBUG

@@ -1,0 +1,15 @@
+# PCP8+EP8+TP1 direct-KV DSpark7 prefiller with KV replicated to every PCP
+# peer (DCP1), into the DP8+EP8 DSpark7 decoder.
+extends: base-dspark7-frankenstein-clean-agentx.yaml
+release: glm53-h200-clean-pcp8-ep8-d1-dp8-ep8-dspark7
+model:
+  label: glm53-h200-clean-pcp8-ep8-d1-dp8-ep8-dspark7
+  served_name: glm53-h200-clean-pcp8-ep8-d1-dp8-ep8-dspark7
+roles:
+  prefill:
+    parallelism: {gpus: 8, tp: 1, pcp: 8, dcp: 1, dp: 1, ep: true}
+  decode:
+    parallelism: {gpus: 8, tp: 1, pcp: 1, dcp: 1, dp: 8, ep: true}
+    vllm:
+      # 115.5 GiB of weights per rank on H200; see the base spec.
+      gpu_memory_utilization: 0.95

@@ -1,0 +1,21 @@
+# No-MTP diagnostic using FlashInfer sparse MLA with A2A DCP. This backend
+# requires standard FP8 KV, so both P/D roles override fp8_ds_mla together.
+extends: p1-pcp8dcp8ep-d1-dp8ep-a2a-agentx.yaml
+release: glm53-b200-pcp8-dcp8-ep8-flashinfer-sparse-a2a
+model:
+  label: glm53-b200-pcp8-dcp8-ep8-flashinfer-sparse-a2a
+  served_name: glm53-b200-pcp8-dcp8-ep8-flashinfer-sparse-a2a
+roles:
+  prefill:
+    kv_transfer_config:
+      engine_id: glm53-b200-pcp8-dcp8-ep8-flashinfer-sparse-a2a-prefill
+    vllm:
+      kv_cache_dtype: fp8
+      attention_config:
+        backend: FLASHINFER_MLA_SPARSE
+        sparse_mla_force_mqa: $delete
+  decode:
+    vllm:
+      kv_cache_dtype: fp8
+      attention_config:
+        backend: FLASHINFER_MLA_SPARSE

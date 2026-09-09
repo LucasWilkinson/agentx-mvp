@@ -9,7 +9,7 @@ model:
   image: quay.io/rh-ee-lwilkins/vllm-envs-cuda:pr8-cv2
 runtime:
   # One centrally pinned build is used by both P/D roles and all three arms.
-  vllm_env: /workspace/vdptest/frankenstein-prefiller-472fb3ff05
+  vllm_env: /workspace/vdptest/frankenstein-prefiller-6b2a1d8c73
   # Replace the stock-image overlay inherited from GLM-5.2. These branches are
   # complete source builds managed by `ve`.
   pre_launch:
@@ -20,7 +20,7 @@ runtime:
         exit 1
       fi
   env:
-    EXPECTED_VLLM_COMMIT: 472fb3ff056b5ab82ff9a7c3ce9a3e0f94dd9305
+    EXPECTED_VLLM_COMMIT: 6b2a1d8c73ae1bb46279d9a88fc1ca0a1ebd1ef3
 roles:
   prefill:
     fabric_profile: deepep_prefill

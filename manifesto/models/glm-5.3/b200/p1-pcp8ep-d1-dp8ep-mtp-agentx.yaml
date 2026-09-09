@@ -7,9 +7,6 @@ model:
 roles:
   prefill:
     parallelism: {gpus: 8, tp: 1, pcp: 8, dcp: 1, dp: 1, ep: true}
-    vllm:
-      # Reserve workspace for sparse FlashMLA under concurrent long-prefill load.
-      gpu_memory_utilization: 0.87
     kv_transfer_config:
       engine_id: glm53-b200-pcp8-ep8-prefill
     env:

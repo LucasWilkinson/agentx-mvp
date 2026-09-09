@@ -1,0 +1,13 @@
+extends: base-nvfp4-frankenstein-pr52705-agentx.yaml
+release: glm53-nvfp4-b200-pcp8-ep8-direct-kv
+model:
+  label: glm53-nvfp4-b200-pcp8-ep8-direct-kv
+  served_name: glm53-nvfp4-b200-pcp8-ep8-direct-kv
+roles:
+  prefill:
+    parallelism: {gpus: 8, tp: 1, pcp: 8, dcp: 1, dp: 1, ep: true}
+    kv_transfer_config:
+      engine_id: glm53-nvfp4-b200-pcp8-ep8-direct-kv-prefill
+    env:
+      VLLM_USE_PCP_DIRECT_KV: "1"
+      VLLM_USE_DIRECT_DCP_KV_GATHER: "0"

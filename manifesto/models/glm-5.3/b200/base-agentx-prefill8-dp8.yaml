@@ -10,7 +10,9 @@ roles:
       VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS: "0"
     vllm:
       max_model_len: 142000
-      gpu_memory_utilization: 0.92
+      # One shared value across all prefiller arms. DP8 needs enough per-rank
+      # KV capacity to admit a 142K request; keep this identical across arms.
+      gpu_memory_utilization: 0.90
       max_num_batched_tokens: 32768
       max_num_seqs: 256
       enable_prefix_caching: true
