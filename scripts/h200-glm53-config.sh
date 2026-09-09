@@ -51,8 +51,15 @@ case "${1:-}" in
     ROUTER_RELEASE="${H200_ROUTER_PREFIX:-lw}-glm53-clean-tep8-tp8-router"
     ROUTER_PROBE_PORT=33125
     ;;
+  clean-dp8-ep8-dspark-tp8)
+    MANIFESTO_USER="${H200_OWNER_PREFIX:-lwilkinson}-glm53-clean-dep8-tp8"
+    MANIFESTO_SPEC=glm-5.3/h200/p1-dp8ep-d1-tp8ep-dspark7-frankenstein-clean-agentx
+    MODEL=glm53-h200-clean-dp8-ep8-d1-tp8-ep8-dspark7
+    ROUTER_RELEASE="${H200_ROUTER_PREFIX:-lw}-glm53-clean-dep8-tp8-router"
+    ROUTER_PROBE_PORT=33128
+    ;;
   *)
-    echo "usage: source scripts/h200-glm53-config.sh <clean-pcp8-ep8-dspark-dp8|clean-pcp8-ep8-dspark-tp8|clean-pcp8-dcp8-ep8-dspark-dp8|clean-pcp8-dcp8-ep8-dspark-tp8|clean-tp8-ep8-dspark-tp8>" >&2
+    echo "usage: source scripts/h200-glm53-config.sh <clean-pcp8-ep8-dspark-dp8|clean-pcp8-ep8-dspark-tp8|clean-pcp8-dcp8-ep8-dspark-dp8|clean-pcp8-dcp8-ep8-dspark-tp8|clean-tp8-ep8-dspark-tp8|clean-dp8-ep8-dspark-tp8|coll-pcp8-ep8-dspark-tp8|coll-pcp8-dcp8-ep8-dspark-tp8>" >&2
     return 2 2>/dev/null || exit 2
     ;;
 esac

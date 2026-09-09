@@ -1,0 +1,46 @@
+# Controlled DEP8 prefiller arm for the H200 DSpark7 P/D matrix: eight
+# independent TP1+EP8 prefill replicas, one NIXL producer per DP rank, into
+# the same TP8+EP8 DSpark7 decoder the PCP and TEP arms use. Only the
+# prefiller parallelism changes.
+#
+# This is the no-context-parallelism control. PCP8 splits one request's
+# context across the eight ranks, so a long prefill is eight-way parallel and
+# the KV pool is sharded; DP8 gives each rank a whole request and its own
+# pool. Expect the opposite trade to PCP8: worse single-request TTFT (one rank
+# chunks a 79.7K prompt through a 16K token budget instead of eight sharing
+# it) against eight fully independent streams and no cross-rank attention
+# collectives at all.
+#
+# Weight/KV budget is identical to the PCP8 arm because the per-rank layout is
+# identical (TP1+EP8, 115.55 GiB of weights, 0.94 utilization -> 14.08 GiB of
+# KV = 192,426 tokens). The difference is what that pool spans: under PCP8 a
+# rank holds one eighth of every context, under DP8 the whole context of its
+# own request. So a replica admits 1.36 requests of 142K, versus ~10.8 across
+# the PCP8 group.
+#
+# Neither this arm nor the TEP8 arm forms a PCP group, so VLLM_USE_PCP_DIRECT_KV
+# and the collectives branch's replacement for it are both inert here. These
+# two exist to price context parallelism itself, not the KV publication path.
+#
+# `routing_proxy` + external DP load balancing on the prefill role follow the
+# GLM-5.2 H200 DP8 producer baseline (glm-5.2/h200/p1-dp8ep-d1-dp8ep-dspark).
+extends: base-dspark7-frankenstein-clean-agentx.yaml
+release: glm53-h200-clean-dp8-ep8-d1-tp8-ep8-dspark7
+model:
+  label: glm53-h200-clean-dp8-ep8-d1-tp8-ep8-dspark7
+  served_name: glm53-h200-clean-dp8-ep8-d1-tp8-ep8-dspark7
+roles:
+  prefill:
+    parallelism: {gpus: 8, tp: 1, pcp: 1, dcp: 1, dp: 8, ep: true}
+    routing_proxy: true
+    dp_load_balancing: external
+    env:
+      # No PCP group to publish into.
+      VLLM_USE_PCP_DIRECT_KV: "0"
+  decode:
+    env:
+      # Same H200 UCX issue as the PCP8 and DCP8 arms: the drafter's LBNHC
+      # regions read per token row stall rank 0 on the GPU-direct-async lanes.
+      UCX_TLS: rc,cuda_copy,cuda_ipc,self,sm,tcp
+    parallelism: {gpus: 8, tp: 8, pcp: 1, dcp: 1, dp: 1, ep: true}
+    dp_load_balancing: $delete
