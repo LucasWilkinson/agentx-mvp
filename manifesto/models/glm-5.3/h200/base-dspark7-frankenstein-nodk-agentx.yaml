@@ -41,7 +41,7 @@ runtime:
   # Shared RWX workspace PVC: one `ve` env serves every node and both roles.
   vllm_env: /workspace/vdptest/frankenstein-nodk-14553f2c
   env:
-    EXPECTED_VLLM_COMMIT: 14553f2cb79963cbe843d6bf946c4ee90e01f40d
+    EXPECTED_VLLM_COMMIT: 1ca5131a078f80831bd8ead6fc8463ad67c80cc1
 vars:
   dspark: &dspark
     method: dspark
