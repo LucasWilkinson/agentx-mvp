@@ -86,6 +86,13 @@ case "${1:-}" in
     ROUTER_RELEASE="${H200_ROUTER_PREFIX:-lw}-glm53-simplify-dcp8-tp8-router"
     ROUTER_PROBE_PORT=33133
     ;;
+  nodk-cgnone-pcp8-ep8-dspark-tp8)
+    MANIFESTO_USER="${H200_OWNER_PREFIX:-lwilkinson}-glm53-nodkcg0-pcp8-tp8"
+    MANIFESTO_SPEC=glm-5.3/h200/p1-pcp8ep-d1-tp8ep-dspark7-frankenstein-nodk-cgnone-agentx
+    MODEL=glm53-h200-nodkcg0-pcp8-ep8-d1-tp8-ep8-dspark7
+    ROUTER_RELEASE="${H200_ROUTER_PREFIX:-lw}-glm53-nodkcg0-pcp8-tp8-router"
+    ROUTER_PROBE_PORT=33134
+    ;;
   no54036-pcp8-ep8-dspark-tp8)
     MANIFESTO_USER="${H200_OWNER_PREFIX:-lwilkinson}-glm53-no54036-pcp8-tp8"
     MANIFESTO_SPEC=glm-5.3/h200/p1-pcp8ep-d1-tp8ep-dspark7-frankenstein-no54036-agentx
@@ -94,7 +101,7 @@ case "${1:-}" in
     ROUTER_PROBE_PORT=33132
     ;;
   *)
-    echo "usage: source scripts/h200-glm53-config.sh <clean-pcp8-ep8-dspark-dp8|clean-pcp8-ep8-dspark-tp8|clean-pcp8-dcp8-ep8-dspark-dp8|clean-pcp8-dcp8-ep8-dspark-tp8|clean-tp8-ep8-dspark-tp8|clean-dp8-ep8-dspark-tp8|coll-pcp8-ep8-dspark-tp8|coll-pcp8-dcp8-ep8-dspark-tp8|nodk-pcp8-ep8-dspark-tp8|nodk-pcp8-dcp8-ep8-dspark-tp8|tsstage-pcp8-dcp8-ep8-dspark-tp8|no54036-pcp8-ep8-dspark-tp8|simplify-pcp8-dcp8-ep8-dspark-tp8>" >&2
+    echo "usage: source scripts/h200-glm53-config.sh <clean-pcp8-ep8-dspark-dp8|clean-pcp8-ep8-dspark-tp8|clean-pcp8-dcp8-ep8-dspark-dp8|clean-pcp8-dcp8-ep8-dspark-tp8|clean-tp8-ep8-dspark-tp8|clean-dp8-ep8-dspark-tp8|coll-pcp8-ep8-dspark-tp8|coll-pcp8-dcp8-ep8-dspark-tp8|nodk-pcp8-ep8-dspark-tp8|nodk-pcp8-dcp8-ep8-dspark-tp8|tsstage-pcp8-dcp8-ep8-dspark-tp8|no54036-pcp8-ep8-dspark-tp8|simplify-pcp8-dcp8-ep8-dspark-tp8|nodk-cgnone-pcp8-ep8-dspark-tp8>" >&2
     return 2 2>/dev/null || exit 2
     ;;
 esac

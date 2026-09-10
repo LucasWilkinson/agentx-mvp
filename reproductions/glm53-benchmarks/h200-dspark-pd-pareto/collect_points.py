@@ -14,6 +14,10 @@ SERIES = [  # (label, sweep dir, arm dir, points subdir, gpus)
     # Re-measured 2026-09-09: the original 20260909T050000Z sweep was deleted before
     # its TPOT / total-token columns were transcribed, so the arm could not be plotted.
     ("PCP8+EP8 (DCP1) -> TP8+EP8 (no direct KV 1ca5131a07)", "20260909T183000Z-nodk-1ca5131a", "nodk-pcp8-ep8-dspark-tp8", "points", 16),
+    # Same env and commit as the line above; the prefiller runs with
+    # cudagraph_mode=NONE instead of PIECEWISE. This prices the constraint that
+    # upstream PR #56107 imposes on any speculative config under PCP.
+    ("PCP8+EP8 (DCP1) -> TP8+EP8 (no direct KV, prefill cudagraph NONE)", "20260910T-nodk-cgnone", "nodk-cgnone-pcp8-ep8-dspark-tp8", "points", 16),
 ]
 out = str(pathlib.Path(__file__).resolve().parent / "points.csv")
 # Older sweeps' raw points were purged; their aggregated rows survive only in

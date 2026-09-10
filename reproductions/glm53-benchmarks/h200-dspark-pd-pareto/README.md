@@ -69,3 +69,43 @@ results/.artifacts/tools/plot-venv/bin/python reproductions/glm53-benchmarks/h20
   10.88 decoded tok/iter exceeds the 8-token ceiling for 7 speculative tokens.
   Use `../extract-vllm-spec-metrics.py`, which differences vLLM's Prometheus
   counters instead.
+
+## Pricing PR #56107's cudagraph constraint (2026-09-10)
+
+Upstream [#56107](https://github.com/vllm-project/vllm/pull/56107) replaces four of the
+branch's spec-decode commits, and its design is cleaner than what it replaces. But its
+`PCPManager.validate_config` rejects *any* speculative config under PCP unless
+`cudagraph_mode` is `NONE`, and every frankenstein prefiller spec runs `PIECEWISE`.
+
+Arm `nodk-cgnone-pcp8-ep8-dspark-tp8` (sweep `20260910T-nodk-cgnone`) prices that, with
+the same env, the same commit `1ca5131a07` and the same points as the nodk arm. The only
+delta is `cudagraph_mode` on the prefill role.
+
+| c | TTFT PIECEWISE | TTFT NONE | Δ | total tok/s/GPU PIECEWISE | NONE | Δ |
+|---|---|---|---|---|---|---|
+| 1 | 772.0 | 917.1 | **+18.8%** | 2643.8 | 2308.9 | **−12.7%** |
+| 2 | 936.5 | 1120.4 | **+19.6%** | 4392.2 | 4042.4 | **−8.0%** |
+| 4 | 7533.5 | 7526.9 | −0.1% | 2273.7 | 2274.5 | +0.0% |
+| 8 | 15868.8 | 16212.0 | +2.2% | 2287.1 | 2256.2 | −1.4% |
+
+0 failures, 0 NCCL errors, 0 region-mismatch assertions on all four points.
+
+Graphless prefill is expensive at low concurrency and free once the prefiller saturates.
+That fits the mechanism: with few requests in flight the per-step launch overhead is
+exposed, and because the workload is 7 turns per request, prefill time lands directly in
+the duration that throughput is computed over.
+
+**Read c1/c2 with the noise floor in mind.** Those are the ~11–12% points (see the
+noise-floor table above); these deltas are about 1.6× that, consistent in direction
+across both concurrencies and both metrics, but from a single run. c4 and c8 are the
+trustworthy points and they are near-flat.
+
+**Conclusion.** Don't adopt the guard as written. It came from `4d675de05f`
+("Harden PCP MTP admission and buffers"), which lands *before* `df3e1678bd`
+("Add replicated PCP DSpark groundwork") in #56107's own commit order, and its message
+still reads "MRV2 PCP with MTP does not support CUDA graphs yet" while firing for DSpark.
+Narrow it to the MTP branch and #56107 becomes adoptable for the DCP1 arm; the remaining
+cost is the NIXL PCP-to-TP port (23 conflict hunks in `base_worker.py`).
+
+#56107 does **not** cover the DCP8 arm: it permits `DCP == PCP`, but main has no
+token-sharded sparse MLA prefill on either backend, so that config cannot run there at all.

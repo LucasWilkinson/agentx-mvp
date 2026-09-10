@@ -1,0 +1,36 @@
+# The nodk PCP8+EP8+TP1 DSpark7 prefiller arm with CUDA graphs off on the
+# prefiller, and nothing else changed.
+#
+# This prices the constraint that upstream PR #56107 imposes. That PR's
+# PCPManager.validate_config rejects *any* speculative config under PCP unless
+# compilation_config.cudagraph_mode is NONE:
+#
+#     if vllm_config.compilation_config.cudagraph_mode != CUDAGraphMode.NONE:
+#         raise NotImplementedError(
+#             "MRV2 PCP with MTP does not support CUDA graphs yet. "
+#             "Set -cc.cudagraph_mode=NONE.")
+#
+# The guard sits under `if speculative_config is not None:`, above the
+# DSpark/MTP split, so it applies to DSpark too. Every frankenstein prefiller
+# spec runs PIECEWISE, so adopting #56107 as-is means running the prefiller
+# without graphs. Same env, same commit, same points as the arm measured in
+# sweep 20260909T183000Z-nodk-1ca5131a; the only delta is cudagraph_mode.
+extends: base-dspark7-frankenstein-nodk-agentx.yaml
+release: glm53-h200-nodkcg0-pcp8-ep8-d1-tp8-ep8-dspark7
+model:
+  label: glm53-h200-nodkcg0-pcp8-ep8-d1-tp8-ep8-dspark7
+  served_name: glm53-h200-nodkcg0-pcp8-ep8-d1-tp8-ep8-dspark7
+roles:
+  prefill:
+    parallelism: {gpus: 8, tp: 1, pcp: 8, dcp: 1, dp: 1, ep: true}
+    vllm:
+      compilation_config:
+        cudagraph_mode: NONE
+  decode:
+    env:
+      # Same H200 UCX issue as the DCP8 arm: without rc_gda every read
+      # completes. Carried over verbatim from the PIECEWISE arm so the two
+      # differ only in the prefiller's cudagraph_mode.
+      UCX_TLS: rc,cuda_copy,cuda_ipc,self,sm,tcp
+    parallelism: {gpus: 8, tp: 8, pcp: 1, dcp: 1, dp: 1, ep: true}
+    dp_load_balancing: $delete
